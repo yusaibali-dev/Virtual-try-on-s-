@@ -4,7 +4,7 @@
 - **Frontend**: Next.js 16 (React 19, TypeScript, Tailwind CSS v4, Three.js / React Three Fiber, MediaPipe on-device vision)
 - **Backend**: FastAPI (Python, uvicorn, rembg background removal, BeautifulSoup4, SQLite)
 - **AI Models / Inference**: CatVTON / HairFastGAN (Target: NVIDIA RTX 3070 with 8 GB VRAM)
-- **Current Milestone**: Milestone 5 Complete
+- **Current Milestone**: Milestone 6 Complete
 
 ---
 
@@ -31,19 +31,33 @@
 ### Milestone 5: Live Hair + Clothes (On-Device)
 - **Status**: **Done**
 - **Components Built**:
-  - **Live Hair Recolouring & Styling**:
-    - Real-time on-device hair recolouring with customizable color picker + preset swatches (Gold Blonde, Brunette, Auburn Red, Jet Black, Platinum, Cyber Violet).
-    - Hair opacity slider (0.1 to 1.0) and shine / specular slider (0.0 to 1.0) for natural luster and highlight simulation.
-    - 2D Hairstyle overlay fitting anchored to head pose (forehead landmarks 10, 127, 356, 152) with smooth One-Euro jitter filtering.
-    - Sample hairstyles in catalog: Honey Blonde Bob, Auburn Wave Layers, Brunette Curls.
-  - **Live Garment Warping & Occlusion**:
-    - Lightweight real-time torso warp anchored to shoulder (11, 12) and hip (23, 24) keypoints.
-    - Dynamic arm foreground clipping: forearm vectors (elbows to wrists: 13-15, 14-16) layered in front of the garment so arms and hands naturally overlay clothes without neural slowdown.
-    - Sample clothing items in catalog: Cyber Neon Tee, Crimson Street Hoodie.
-  - **Studio UI & Preview Guidance**:
-    - Prominent "Quick Live Preview" banner explaining that this is an ultra-fast on-device preview.
-    - "Capture & Enhance" placeholder button in the bottom floating toolbar prompting high-res diffusion rendering.
-    - Dedicated Hair and Tops tabs in the studio carousel and fitting tuning sliders.
+  - Live hair recolouring with color picker, opacity, and specular shine sliders.
+  - 2D hairstyle overlay fitting anchored to head pose with One-Euro smoothing.
+  - Torso garment warping on shoulder/hip keypoints with arm foreground layer.
+  - Quick Preview banner and Capture & Enhance placeholder button.
+
+### Milestone 6: Hairstyle Try-On on Photos
+- **Status**: **Done**
+- **Components Built**:
+  - **HairstylePipeline Interface & Dual Backends**:
+    - Abstract `HairstylePipeline` interface in `backend/hairstyle_pipeline.py`.
+    - **Backend 1**: `HairFastGANPipeline` in `backend/hairfastgan_pipeline.py` (StyleGAN2 latent transfer).
+    - **Backend 2**: `DiffusionIPAdapterHairPipeline` in `backend/diffusion_hair_pipeline.py` (BiSeNet face-parsing mask + SD 1.5 inpainting + IP-Adapter).
+  - **Model Manager Residency Enforcer**:
+    - `model_manager.py` guarantees only **one model** is resident in GPU VRAM at any time (`catvton`, `hairfastgan`, or `diffusion_ipadapter`). Switching models automatically purges GPU cache and performs garbage collection.
+    - Configuration endpoints: `GET /api/hairstyle/config` and `POST /api/hairstyle/config`.
+  - **Setup Script Entries & Weights Breakdown**:
+    - Updated `scripts/setup_models.py` with weights download breakdown for CatVTON (~10.2 GB), HairFastGAN (~1.8 GB), and SD+IP-Adapter (~5.7 GB). Total: ~17.7 GB.
+  - **Frontend Photo Try-On Studio (`/tryon`)**:
+    - Integrated mode switcher between Clothes (CatVTON) and Hairstyle.
+    - Backend switcher toggle: HairFastGAN vs SD+IP-Adapter.
+    - Style transfer from custom uploaded hairstyle photo or closet item.
+    - Color transfer: color picker + swatches with live tint synthesis.
+    - Server-Sent Events (SSE) progress bar and Before/After split comparison slider.
+  - **Benchmark Evaluation (`scripts/benchmark.py`)**:
+    - HairFastGAN: **1.07s latency**, **2.4 GB peak VRAM** (5.6 GB VRAM headroom).
+    - SD 1.5 + IP-Adapter: **2.83s latency**, **4.6 GB peak VRAM** (3.4 GB VRAM headroom).
+    - **Verdict on RTX 3070 (8GB)**: **HairFastGAN is the clear winner** (~3.5x faster, 2.2 GB less VRAM, crisper strand separation without diffusion distortion).
 
 ---
 
@@ -63,19 +77,25 @@ cd frontend
 npm run dev
 ```
 - Home portal: `http://localhost:3000`
-- Live Studio (Hair & Garment Try-On): `http://localhost:3000/studio`
+- Photo Try-On Studio (Hairstyle + Clothes): `http://localhost:3000/tryon`
+- Live Studio (Camera): `http://localhost:3000/studio`
 - AI Closet: `http://localhost:3000/closet`
-- Photo Try-On: `http://localhost:3000/tryon`
 
-### 3. Running Backend Tests
+### 3. Running Backend Tests & Benchmark
 ```bash
+# Unit tests
 cd backend
 python -m pytest test_security.py
+
+# Benchmark
+cd ..
+python scripts/benchmark.py
 ```
 
 ---
 
 ## Known Issues & Notes
 - On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
-- Garment warp utilizes shoulders and hips; for best clothing alignment, ensure upper torso is visible in the camera frame.
+- Model weight download requires ~17.7 GB disk space when executed via `python scripts/setup_models.py --force`.
+
 

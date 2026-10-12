@@ -414,5 +414,175 @@ def cancel_job(job_id: str):
     jobs_db[job_id]["message"] = "Job cancelled by user request"
     return {"status": "cancelled", "job_id": job_id}
 
+# -------------------------------------------------------------
+# Milestone 6: Hairstyle Try-On & Pipeline Backend Switching
+# -------------------------------------------------------------
+class HairstyleConfigUpdate(BaseModel):
+    backend: str  # "hairfastgan" or "diffusion_ipadapter"
+
+@app.get("/api/hairstyle/config")
+def get_hairstyle_config():
+    """Returns current active hairstyle backend, available backends, and VRAM status."""
+    return {
+        "active_backend": model_manager.hairstyle_backend,
+        "available_backends": [
+            {
+                "id": "hairfastgan",
+                "name": "HairFastGAN",
+                "description": "High-fidelity StyleGAN2 latent transfer (~1.0s, 2.4 GB VRAM)",
+                "recommended_for": "Fast photo try-on on RTX 3070",
+                "memory_gb": 2.4,
+                "latency_s": 1.0
+            },
+            {
+                "id": "diffusion_ipadapter",
+                "name": "Face-Parsing + SD Inpainting + IP-Adapter",
+                "description": "Stable Diffusion 1.5 inpainting with IP-Adapter (~3.5s, 4.6 GB VRAM)",
+                "recommended_for": "Artistic & diverse creative restyling",
+                "memory_gb": 4.6,
+                "latency_s": 3.5
+            }
+        ],
+        "vram_info": model_manager.get_vram_usage()
+    }
+
+@app.post("/api/hairstyle/config")
+def set_hairstyle_config(cfg: HairstyleConfigUpdate):
+    """Switches the global default hairstyle synthesis backend."""
+    try:
+        model_manager.set_hairstyle_backend(cfg.backend)  # type: ignore
+        return {
+            "success": True,
+            "active_backend": model_manager.hairstyle_backend
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+async def process_hairstyle_job(
+    job_id: str,
+    person_bytes: bytes,
+    reference_bytes: Optional[bytes],
+    color_hex: Optional[str],
+    backend: Optional[str]
+):
+    queue = job_queues.get(job_id)
+    try:
+        jobs_db[job_id]["status"] = "processing"
+        if queue:
+            await queue.put({
+                "percent": 5,
+                "message": f"Initializing hairstyle pipeline ({backend or model_manager.hairstyle_backend})...",
+                "status": "processing"
+            })
+
+        person_img = Image.open(io.BytesIO(person_bytes)).convert("RGB")
+        reference_img = Image.open(io.BytesIO(reference_bytes)).convert("RGBA") if reference_bytes else None
+
+        async def on_progress(percent: int, message: str):
+            jobs_db[job_id]["progress"] = percent
+            jobs_db[job_id]["message"] = message
+            if queue:
+                await queue.put({"percent": percent, "message": message, "status": "processing"})
+
+        result_img = await model_manager.run_hairstyle(
+            person_image=person_img,
+            reference_style_image=reference_img,
+            color_hex=color_hex,
+            backend_override=backend,  # type: ignore
+            progress_callback=on_progress
+        )
+
+        out_filename = f"{job_id}_hair_result.png"
+        out_path = os.path.join(TRYON_DIR, out_filename)
+        result_img.save(out_path, format="PNG")
+
+        result_url = f"/storage/tryon/{out_filename}"
+        jobs_db[job_id]["status"] = "completed"
+        jobs_db[job_id]["progress"] = 100
+        jobs_db[job_id]["message"] = "Hairstyle synthesis completed successfully!"
+        jobs_db[job_id]["result_url"] = result_url
+
+        if queue:
+            await queue.put({
+                "percent": 100,
+                "message": "Hairstyle synthesis completed successfully!",
+                "status": "completed",
+                "result_url": result_url
+            })
+
+    except asyncio.CancelledError:
+        jobs_db[job_id]["status"] = "cancelled"
+        jobs_db[job_id]["message"] = "Job cancelled by user"
+        if queue:
+            await queue.put({"status": "cancelled", "message": "Job cancelled"})
+    except Exception as e:
+        jobs_db[job_id]["status"] = "failed"
+        jobs_db[job_id]["message"] = str(e)
+        if queue:
+            await queue.put({"status": "failed", "message": str(e)})
+
+@app.post("/api/tryon/hairstyle")
+async def create_hairstyle_job(
+    person_photo: UploadFile = File(...),
+    reference_photo: Optional[UploadFile] = File(None),
+    closet_item_id: Optional[str] = Form(None),
+    color_hex: Optional[str] = Form(None),
+    backend: Optional[str] = Form(None)
+):
+    """
+    Submits a hairstyle try-on job to the single-GPU job queue.
+    Accepts:
+    - person_photo: Target user image
+    - reference_photo or closet_item_id: Hairstyle reference
+    - color_hex: Optional hair color tint
+    - backend: 'hairfastgan' or 'diffusion_ipadapter' (defaults to active backend)
+    """
+    person_bytes = await person_photo.read()
+    reference_bytes = None
+
+    if reference_photo:
+        reference_bytes = await reference_photo.read()
+    elif closet_item_id:
+        item = get_item(closet_item_id)
+        if item:
+            item_path = os.path.join(UPLOADS_DIR, item["image_filename"])
+            if os.path.exists(item_path):
+                with open(item_path, "rb") as f:
+                    reference_bytes = f.read()
+
+    job_id = str(uuid.uuid4())
+    chosen_backend = backend or model_manager.hairstyle_backend
+
+    jobs_db[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "message": f"Hairstyle job queued ({chosen_backend})",
+        "category": "hair",
+        "backend": chosen_backend,
+        "color_hex": color_hex,
+        "result_url": None
+    }
+    job_queues[job_id] = asyncio.Queue()
+
+    # Launch background task
+    asyncio.create_task(
+        process_hairstyle_job(
+            job_id=job_id,
+            person_bytes=person_bytes,
+            reference_bytes=reference_bytes,
+            color_hex=color_hex,
+            backend=chosen_backend
+        )
+    )
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "backend": chosen_backend,
+        "message": f"Hairstyle job queued on single-GPU manager ({chosen_backend})"
+    }
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
