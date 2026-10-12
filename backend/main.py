@@ -1,14 +1,22 @@
 import os
 import uuid
 from typing import Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 import base64
+import time
 
-from security import validate_url_ssrf, fetch_image_from_url, fetch_product_page_og
+from security import (
+    validate_url_ssrf,
+    fetch_image_from_url,
+    fetch_product_page_og,
+    validate_upload_image,
+    check_nsfw_content,
+    rate_limiter
+)
 from pipeline import detect_category, remove_background, create_thumbnail, VALID_CATEGORIES
 from database import init_db, insert_item, list_items, get_item, toggle_favourite, delete_item
 
@@ -147,18 +155,31 @@ async def create_item_from_url(payload: ItemUrlRequest):
 
 @app.post("/api/items/upload")
 async def create_item_from_upload(
+    request: Request,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     category: Optional[str] = Form(None)
 ):
     """
     Upload an item image from local device.
-    Applies background removal, category detection, thumbnail creation, and DB persistence.
+    Applies rate limiting, upload validation, NSFW content check,
+    background removal, category detection, thumbnail creation, and DB persistence.
     """
+    # 1. Rate limiting
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    if not rate_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded (max 40 requests/min). Please try again later.")
+
     try:
         content = await file.read()
-        if len(content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="Uploaded file exceeds 10 MB limit.")
+        
+        # 2. Upload validation
+        validate_upload_image(content, file.filename)
+
+        # 3. Basic NSFW check
+        is_nsfw, nsfw_reason = check_nsfw_content(content)
+        if is_nsfw:
+            raise HTTPException(status_code=400, detail=f"Image upload rejected: {nsfw_reason}")
 
         item_title = title or os.path.splitext(file.filename)[0].replace("-", " ").replace("_", " ").title()
 
@@ -246,6 +267,72 @@ def remove_closet_item(item_id: str):
         os.remove(thumb_path)
 
     return {"deleted": True, "id": item_id}
+
+# -------------------------------------------------------------
+# Milestone 8: Privacy & Data Retention: TTL Cleanup & Delete All
+# -------------------------------------------------------------
+DEFAULT_TTL_SECONDS = 3600 # 1 hour TTL for uploaded try-on frames and temp files
+
+def cleanup_stale_tryon_files(ttl_seconds: int = DEFAULT_TTL_SECONDS):
+    """
+    Purges temporary try-on outputs and uploads older than TTL (default 1 hour).
+    Ensures no permanent retention of user photos.
+    """
+    now = time.time()
+    count = 0
+    for folder in (TRYON_DIR, UPLOADS_DIR, THUMBNAILS_DIR):
+        if not os.path.exists(folder):
+            continue
+        for fname in os.listdir(folder):
+            fpath = os.path.join(folder, fname)
+            if os.path.isfile(fpath):
+                file_age = now - os.path.getmtime(fpath)
+                if file_age > ttl_seconds:
+                    try:
+                        os.remove(fpath)
+                        count += 1
+                    except Exception:
+                        pass
+    return count
+
+@app.post("/api/user/delete-data")
+def delete_all_user_data():
+    """
+    'Delete my data' action:
+    Purges all items from SQLite database and wipes all stored photos,
+    thumbnails, and try-on output files immediately.
+    """
+    # 1. Clear database items
+    all_items = list_items()
+    for item in all_items:
+        delete_item(item["id"])
+
+    # 2. Wipe storage directories
+    for folder in (UPLOADS_DIR, THUMBNAILS_DIR, TRYON_DIR):
+        if os.path.exists(folder):
+            for fname in os.listdir(folder):
+                fpath = os.path.join(folder, fname)
+                try:
+                    if os.path.isfile(fpath):
+                        os.remove(fpath)
+                except Exception:
+                    pass
+
+    return {
+        "success": True,
+        "message": "All user data, closet items, and generated try-on photos have been permanently deleted."
+    }
+
+@app.on_event("startup")
+async def start_periodic_ttl_cleanup():
+    """Starts background periodic TTL cleanup worker (runs every 15 minutes)."""
+    async def ttl_worker():
+        while True:
+            await asyncio.sleep(900) # 15 minutes
+            deleted = cleanup_stale_tryon_files(DEFAULT_TTL_SECONDS)
+            if deleted > 0:
+                print(f"[Privacy TTL] Automatically purged {deleted} stale files (>1h old).")
+    asyncio.create_task(ttl_worker())
 
 # -------------------------------------------------------------
 # Milestone 4: CatVTON Photo Try-On & Job Queue Endpoints

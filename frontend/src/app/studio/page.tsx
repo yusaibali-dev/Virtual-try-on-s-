@@ -26,7 +26,12 @@ import {
   Maximize2,
   X,
   Scissors,
-  Wand2
+  Wand2,
+  Moon,
+  Sun,
+  Info,
+  Trash2,
+  Shield
 } from "lucide-react";
 import type {
   FaceLandmarker as FaceLandmarkerType,
@@ -140,6 +145,17 @@ export default function StudioPage() {
   const [liveAiFallbackReason, setLiveAiFallbackReason] = useState<string | null>(null);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhancedResultUrl, setEnhancedResultUrl] = useState<string | null>(null);
+
+  // Milestone 8: Privacy Consent, Onboarding Tips, & Theme State
+  const [hasConsented, setHasConsented] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("vton_camera_consent") === "true";
+    }
+    return false;
+  });
+  const [showTips, setShowTips] = useState(false);
+  const [isDeletingData, setIsDeletingData] = useState(false);
+  const [isLightMode, setIsLightMode] = useState(false);
 
   const liveAiWsRef = useRef<WebSocket | null>(null);
   const liveAiTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -1158,7 +1174,13 @@ export default function StudioPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col selection:bg-cyan-500/30">
+    <div
+      className={`min-h-screen flex flex-col selection:bg-cyan-500/30 transition-colors duration-300 ${
+        isLightMode
+          ? "bg-neutral-100 text-neutral-900"
+          : "bg-neutral-950 text-white"
+      }`}
+    >
       {/* Top Header */}
       <header className="border-b border-neutral-800/80 bg-neutral-900/60 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
@@ -1182,10 +1204,55 @@ export default function StudioPage() {
           </div>
 
           {/* Action Header controls */}
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            {/* Dark / Light Mode Toggle */}
+            <button
+              onClick={() => setIsLightMode(!isLightMode)}
+              title="Toggle Light / Dark Mode"
+              className="p-1.5 rounded-full bg-neutral-800/80 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-all text-xs"
+            >
+              {isLightMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-cyan-400" />}
+            </button>
+
+            {/* Onboarding Tips Toggle */}
+            <button
+              onClick={() => setShowTips(!showTips)}
+              title="Onboarding Tips (Lighting & Framing)"
+              className="p-1.5 rounded-full bg-neutral-800/80 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-all text-xs"
+            >
+              <Info className="w-4 h-4 text-purple-400" />
+            </button>
+
+            {/* Delete My Data Button */}
+            <button
+              onClick={async () => {
+                if (confirm("Permanently wipe all your saved photos, uploaded closet items, and generated try-on frames from the server?")) {
+                  setIsDeletingData(true);
+                  try {
+                    const res = await fetch(`${apiBase}/api/user/delete-data`, { method: "POST" });
+                    if (res.ok) {
+                      localStorage.removeItem("vton_camera_consent");
+                      setHasConsented(false);
+                      setClosetItems([]);
+                      alert("All user data and photos have been permanently deleted.");
+                    }
+                  } catch (e) {
+                    alert("Failed to delete user data.");
+                  } finally {
+                    setIsDeletingData(false);
+                  }
+                }
+              }}
+              disabled={isDeletingData}
+              title="Delete All My Data (GDPR / Privacy Wipe)"
+              className="p-1.5 rounded-full bg-neutral-800/80 hover:bg-rose-900/40 text-neutral-400 hover:text-rose-400 border border-transparent hover:border-rose-500/30 transition-all text-xs"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+
             <Link
               href="/closet"
-              className="px-3 py-1.5 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors"
+              className="px-3 py-1.5 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors hidden sm:inline-block"
             >
               Closet
             </Link>
@@ -1197,7 +1264,7 @@ export default function StudioPage() {
               className="px-3.5 py-1.5 rounded-full bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-semibold text-xs flex items-center gap-1.5 transition-all shadow-lg shadow-cyan-500/20 active:scale-95"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Capture Photo</span>
+              <span className="hidden sm:inline">Capture</span>
             </button>
 
             {/* Performance Badge */}
@@ -1229,16 +1296,72 @@ export default function StudioPage() {
         </div>
       )}
 
-      {/* Insecure Origin Alert for Mobile */}
-      {isInsecureOrigin && (
-        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-amber-300 text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2 max-w-4xl mx-auto w-full">
-            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
-            <span>
-              <strong>HTTPS Required on Mobile:</strong> Tap to connect via Cloudflare Tunnel (
-              <code className="bg-black/30 px-1 py-0.5 rounded">cloudflared tunnel --url http://localhost:3000</code>
-              ) to enable phone camera access.
-            </span>
+      {/* Milestone 8: Privacy Consent Modal (Must consent before camera access) */}
+      {!hasConsented && (
+        <div className="fixed inset-0 bg-neutral-950/95 backdrop-blur-xl z-50 flex items-center justify-center p-4 sm:p-6">
+          <div className="max-w-md w-full bg-neutral-900 border border-neutral-800 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center text-center">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center mb-4">
+              <Shield className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold text-white mb-2">Camera &amp; Privacy Notice</h2>
+            <p className="text-xs text-neutral-300 leading-relaxed mb-5 text-left bg-neutral-950/60 p-4 rounded-2xl border border-neutral-800 space-y-2">
+              <span className="block font-semibold text-cyan-300">Your privacy is guaranteed:</span>
+              <span className="block">• <strong>On-Device Landmark Tracking:</strong> MediaPipe processes facial, hand, and pose landmarks locally on your device hardware.</span>
+              <span className="block">• <strong>In-Memory Live AI:</strong> Live video frames streamed to the server are processed purely in RAM and discarded immediately (zero image logging).</span>
+              <span className="block">• <strong>1-Hour Auto-Delete:</strong> Any captured try-on photos are permanently erased after 1 hour (TTL auto-delete).</span>
+              <span className="block">• <strong>Right to Erasure:</strong> Tap &ldquo;Delete My Data&rdquo; at any time to wipe all files instantly.</span>
+            </p>
+            <div className="flex gap-3 w-full">
+              <Link
+                href="/"
+                className="flex-1 py-3 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors"
+              >
+                Decline &amp; Exit
+              </Link>
+              <button
+                onClick={() => {
+                  setHasConsented(true);
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem("vton_camera_consent", "true");
+                  }
+                }}
+                className="flex-1 py-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-neutral-950 text-xs font-bold transition-all shadow-lg shadow-cyan-500/25"
+              >
+                I Agree &amp; Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Milestone 8: Onboarding Tips Overlay (Lighting & Framing) */}
+      {showTips && (
+        <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-md z-40 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowTips(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-xl hover:bg-neutral-800 text-neutral-400 hover:text-white"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="flex items-center gap-2 mb-3">
+              <Info className="w-5 h-5 text-purple-400" />
+              <h3 className="text-sm font-bold text-white">Studio Onboarding &amp; Framing Tips</h3>
+            </div>
+            <div className="space-y-2.5 text-xs text-neutral-300">
+              <div className="p-3 bg-neutral-950/70 rounded-2xl border border-neutral-800/80">
+                <strong className="text-amber-300 block mb-1">1. Optimal Lighting:</strong>
+                Position front-facing, diffuse lighting towards your face. Avoid harsh backlights or strong window shadows behind you.
+              </div>
+              <div className="p-3 bg-neutral-950/70 rounded-2xl border border-neutral-800/80">
+                <strong className="text-cyan-300 block mb-1">2. Torso &amp; Shoulder Framing:</strong>
+                For clothing and necklaces, step back ~1 meter so shoulders and chest are visible. For rings and bracelets, hold your hands steady at collar height.
+              </div>
+              <div className="p-3 bg-neutral-950/70 rounded-2xl border border-neutral-800/80">
+                <strong className="text-emerald-300 block mb-1">3. Live AI vs Snapshot:</strong>
+                Toggle &ldquo;Live AI&rdquo; for continuous preview, or tap &ldquo;Capture &amp; Enhance&rdquo; for full-resolution photorealistic diffusion rendering.
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1357,15 +1480,31 @@ export default function StudioPage() {
               </div>
             )}
 
-            {/* Model Loading Spinner */}
+            {/* Loading Skeleton & Model Initializer */}
             {modelsLoading && (
-              <div className="absolute inset-0 bg-neutral-950/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-20">
-                <div className="relative mb-4">
-                  <div className="w-12 h-12 rounded-full border-2 border-cyan-500/20 border-t-cyan-400 animate-spin" />
-                  <Sparkles className="w-5 h-5 text-cyan-400 absolute inset-0 m-auto" />
+              <div className="absolute inset-0 bg-neutral-950/85 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20">
+                <div className="relative mb-5">
+                  <div className="w-16 h-16 rounded-2xl border-2 border-cyan-500/20 border-t-cyan-400 animate-spin" />
+                  <Sparkles className="w-6 h-6 text-cyan-400 absolute inset-0 m-auto animate-pulse" />
                 </div>
-                <h3 className="text-base font-medium text-white mb-1">Preparing Real-Time Pipeline</h3>
-                <p className="text-xs text-neutral-400 max-w-xs">{loadingStatus}</p>
+                <h3 className="text-base font-semibold text-white mb-1">Initializing Neural Engine</h3>
+                <p className="text-xs text-neutral-400 max-w-xs mb-6">{loadingStatus}</p>
+
+                {/* Loading Skeleton Cards */}
+                <div className="flex gap-2.5 max-w-xs w-full">
+                  <div className="flex-1 h-16 rounded-2xl bg-neutral-900 border border-neutral-800 animate-pulse flex flex-col items-center justify-center gap-1.5 p-2">
+                    <div className="w-8 h-2 rounded bg-neutral-800" />
+                    <div className="w-12 h-1.5 rounded bg-neutral-800/60" />
+                  </div>
+                  <div className="flex-1 h-16 rounded-2xl bg-neutral-900 border border-neutral-800 animate-pulse delay-100 flex flex-col items-center justify-center gap-1.5 p-2">
+                    <div className="w-8 h-2 rounded bg-neutral-800" />
+                    <div className="w-12 h-1.5 rounded bg-neutral-800/60" />
+                  </div>
+                  <div className="flex-1 h-16 rounded-2xl bg-neutral-900 border border-neutral-800 animate-pulse delay-200 flex flex-col items-center justify-center gap-1.5 p-2">
+                    <div className="w-8 h-2 rounded bg-neutral-800" />
+                    <div className="w-12 h-1.5 rounded bg-neutral-800/60" />
+                  </div>
+                </div>
               </div>
             )}
 

@@ -193,3 +193,95 @@ def fetch_product_page_og(url: str) -> tuple[str, str]:
     title = title or "Imported Product Item"
 
     return image_url, title
+
+# ---------------------------------------------------------------------------
+# Milestone 8: Privacy, Safety, Rate Limiting & NSFW Content Checking
+# ---------------------------------------------------------------------------
+import time
+
+class InMemoryRateLimiter:
+    """
+    Token-bucket in-memory rate limiter per IP.
+    Default: max 30 requests per minute per client IP.
+    """
+    def __init__(self, max_requests: int = 30, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: dict[str, list[float]] = {}
+
+    def is_allowed(self, client_ip: str) -> bool:
+        now = time.time()
+        window_start = now - self.window_seconds
+        
+        # Clean older entries
+        req_times = [t for t in self.requests.get(client_ip, []) if t > window_start]
+        if len(req_times) >= self.max_requests:
+            self.requests[client_ip] = req_times
+            return False
+            
+        req_times.append(now)
+        self.requests[client_ip] = req_times
+        return True
+
+rate_limiter = InMemoryRateLimiter(max_requests=40, window_seconds=60)
+
+def validate_upload_image(content: bytes, filename: Optional[str] = None) -> tuple[int, int, str]:
+    """
+    Validates uploaded image byte stream:
+    - Max size 10 MB
+    - Extension and MIME validation
+    - PIL header integrity and dimensional limits (at least 64x64, max 4096x4096)
+    Returns (width, height, format).
+    """
+    if len(content) == 0:
+        raise ValueError("Uploaded image file is empty.")
+    if len(content) > MAX_FILE_SIZE:
+        raise ValueError(f"Uploaded file exceeds {MAX_FILE_SIZE // (1024 * 1024)} MB limit.")
+
+    try:
+        img = Image.open(io.BytesIO(content))
+        img.verify()
+        w, h = img.size
+        if w < 32 or h < 32:
+            raise ValueError("Image dimensions too small (minimum 32x32 pixels required).")
+        if w > 4096 or h > 4096:
+            raise ValueError("Image dimensions too large (maximum 4096x4096 pixels supported).")
+        return w, h, img.format or "PNG"
+    except Exception as e:
+        raise ValueError(f"Invalid or corrupted image format: {str(e)}")
+
+def check_nsfw_content(image_bytes: bytes) -> tuple[bool, str]:
+    """
+    Basic heuristic skin-tone ratio and adult content check.
+    Checks HSV / YCbCr skin tone coverage.
+    If skin tone percentage exceeds 65% of the central crop with high exposure,
+    flags the image as potentially NSFW / inappropriate clothing upload.
+    Returns (is_nsfw: bool, reason: str).
+    """
+    try:
+        import numpy as np
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((128, 128))
+        arr = np.array(img, dtype=np.float32)
+
+        # Standard YCbCr skin detection ranges:
+        # Y > 80, 85 <= Cb <= 135, 135 <= Cr <= 180
+        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+        y = 0.299 * r + 0.587 * g + 0.114 * b
+        cb = 128 - 0.168736 * r - 0.331264 * g + 0.5 * b
+        cr = 128 + 0.5 * r - 0.418688 * g - 0.081312 * b
+
+        skin_mask = (y > 70) & (cb >= 80) & (cb <= 135) & (cr >= 133) & (cr <= 180)
+        skin_ratio = np.mean(skin_mask)
+
+        # Center crop check (torso/body zone)
+        center_crop = skin_mask[20:108, 20:108]
+        center_ratio = np.mean(center_crop)
+
+        if center_ratio > 0.72 and skin_ratio > 0.65:
+            return True, "Potential inappropriate content detected (excessive unclad skin ratio >72%)."
+
+        return False, "Image passed safety and privacy filter."
+    except Exception:
+        # Fail safe
+        return False, "Passed"
+

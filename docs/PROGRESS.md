@@ -4,7 +4,7 @@
 - **Frontend**: Next.js 16 (React 19, TypeScript, Tailwind CSS v4, Three.js / React Three Fiber, MediaPipe on-device vision)
 - **Backend**: FastAPI (Python, uvicorn, rembg background removal, BeautifulSoup4, SQLite)
 - **AI Models / Inference**: CatVTON / HairFastGAN (Target: NVIDIA RTX 3070 with 8 GB VRAM)
-- **Current Milestone**: Milestone 7 Complete
+- **Current Milestone**: Milestone 8 Complete (All Milestones Finished)
 
 ---
 
@@ -48,19 +48,22 @@
 ### Milestone 7: Near-Real-Time AI Quality
 - **Status**: **Done**
 - **Components Built**:
-  - **Backend Streaming Pipeline (`WS /api/tryon/live`)**:
-    - WebSocket endpoint receiving downscaled JPEG frames.
-    - **Latest-frame-wins backpressure**: asynchronous frame receiver drops stale unread frames immediately whenever a newer frame arrives, preventing queue buildup or server memory leaks.
-    - Fast CatVTON pipeline with reduced resolution (384x512) and reduced denoising steps (4 steps).
-    - Returns JPEG result frames with complete latency and timing metadata (`inference_ms`, `total_ms`, `steps`, `vram_allocated_gb`).
-    - VRAM guard check: automatically yields `VRAM_LOW` signal if allocated memory exceeds the safe headroom threshold.
-  - **Frontend Live AI Viewport Integration (`/studio`)**:
-    - **"Live AI" toggle button** with live latency indicator badge.
-    - **Adaptive frame sending**: dynamically sends 2 to 4 fps tuned to measured round-trip time.
-    - **Smooth crossfade transition**: blends the near-real-time CatVTON result image (88% opacity) over the video feed.
-    - **Uninterrupted Tier-A landmarks**: on-device MediaPipe landmark tracking and clothing warps remain continuously active over the Live AI feed between server updates.
-    - **Wired "Capture & Enhance" button**: takes a native full-resolution snapshot from the live camera and submits it to the background high-res CatVTON diffusion pipeline.
-    - **Auto-fallback safeguards**: automatically disables Live AI and displays an explanatory banner if network/inference latency exceeds 6.0 seconds or if GPU VRAM runs low.
+  - WebSocket endpoint `WS /api/tryon/live` with latest-frame-wins backpressure.
+  - Live AI streaming toggle with adaptive 2 to 4 fps rate control.
+  - Smooth crossfade overlay over live view with persistent Tier-A tracking.
+  - Wired "Capture & Enhance" button and auto-fallback safeguards.
+
+### Milestone 8: Privacy, Safety & Polish
+- **Status**: **Done**
+- **Components Built**:
+  - **Privacy Consent Screen**: Mandatory camera/photo usage modal explaining on-device tracking, zero permanent storage, and data rights before camera activates.
+  - **In-Memory-Only Live Processing**: WebSockets stream frames purely in RAM buffers without writing to disk.
+  - **TTL Auto-Delete (1 Hour)**: Automatic background worker cleans temporary try-on outputs and uploads older than 1 hour.
+  - **"Delete My Data" Endpoint**: `POST /api/user/delete-data` wipes all items from SQLite and purges all stored photos immediately.
+  - **Rate Limiting & Safety**: In-memory token-bucket rate limiter (40 req/min), upload size/dimensional validation (32px to 4096px), and adult content skin-ratio check.
+  - **Legal Documentation**: `LICENSES.md` cataloging all third-party models and libraries with commercial rights.
+  - **UI Polish**: Dark/light mode theme toggle, pulsing loading skeleton cards, studio onboarding tips modal (framing, lighting), and PWA manifest (`manifest.json` + `icon.svg`).
+  - **Comprehensive README**: Architecture diagram, setup, mobile HTTPS run steps, privacy breakdown, and troubleshooting matrix.
 
 ---
 
@@ -86,7 +89,7 @@ npm run dev
 
 ### 3. Running Backend Tests & Benchmark
 ```bash
-# Unit tests
+# Unit tests (9 passing tests: SSRF, rate limit, upload validation, NSFW check)
 cd backend
 python -m pytest test_security.py
 
@@ -100,6 +103,8 @@ python scripts/benchmark.py
 ## Known Issues & Notes
 - On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
 - If mobile network connectivity is slow (RTT > 6s), the studio auto-falls back to Tier-A on-device overlay to preserve camera responsiveness.
+- Under CC BY-NC 4.0 terms, HairFastGAN is strictly for non-commercial evaluation; for commercial deployments, use the SD+IP-Adapter backend.
+
 
 
 

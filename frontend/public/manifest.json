@@ -1,0 +1,16 @@
+{
+  "name": "Virtual Try-On (VTON) Studio",
+  "short_name": "VTON Studio",
+  "description": "Real-time on-device virtual try-on for jewelry, hairstyles, and apparel with neural diffusion enhancement.",
+  "start_url": "/studio",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#06b6d4",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
