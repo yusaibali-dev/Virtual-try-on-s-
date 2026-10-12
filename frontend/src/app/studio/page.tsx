@@ -66,18 +66,24 @@ export default function StudioPage() {
   const [enablePose, setEnablePose] = useState(false);
   const [enableHands, setEnableHands] = useState(false);
 
-  // Milestone 2: Jewelry Selection & Try-On State
-  const [activeCategory, setActiveCategory] = useState<"earring" | "necklace" | "ring" | "bracelet">("necklace");
+  // Milestone 2 & 3: Selection & Try-On State
+  const [activeCategory, setActiveCategory] = useState<
+    "necklace" | "earring" | "ring" | "bracelet" | "upper" | "dress"
+  >("necklace");
   const [selectedItems, setSelectedItems] = useState<{
-    earring: JewelryItem | null;
-    necklace: JewelryItem | null;
-    ring: JewelryItem | null;
-    bracelet: JewelryItem | null;
+    earring: any | null;
+    necklace: any | null;
+    ring: any | null;
+    bracelet: any | null;
+    upper: any | null;
+    dress: any | null;
   }>({
     earring: JEWELRY_CATALOG.find((i) => i.id === "earring-diamond-drop") || null,
     necklace: JEWELRY_CATALOG.find((i) => i.id === "necklace-sapphire-pendant") || null,
     ring: JEWELRY_CATALOG.find((i) => i.id === "ring-solitaire-diamond") || null,
-    bracelet: JEWELRY_CATALOG.find((i) => i.id === "bracelet-diamond-tennis") || null
+    bracelet: JEWELRY_CATALOG.find((i) => i.id === "bracelet-diamond-tennis") || null,
+    upper: null,
+    dress: null
   });
 
   // Display Mode: 2D Overlay (Canvas PNG) vs 3D Interactive GLB
@@ -91,13 +97,17 @@ export default function StudioPage() {
     necklaceOffsetY: number;
     ringScale: number;
     braceletScale: number;
+    upperScale: number;
+    upperOffsetY: number;
   }>({
     earringScale: 1.0,
     earringOffsetY: 0,
     necklaceScale: 1.0,
     necklaceOffsetY: 15,
     ringScale: 1.0,
-    braceletScale: 1.0
+    braceletScale: 1.0,
+    upperScale: 1.0,
+    upperOffsetY: 30
   });
 
   // Performance Metrics
@@ -115,6 +125,12 @@ export default function StudioPage() {
   const ringFilterRef = useRef(new OneEuroTransform(0.7, 0.03));
   const braceletFilterRef = useRef(new OneEuroTransform(0.7, 0.03));
 
+  // Upper clothing / dress filter
+  const upperFilterRef = useRef(new OneEuroTransform(0.5, 0.025));
+
+  // Closet items loaded from backend
+  const [closetItems, setClosetItems] = useState<any[]>([]);
+
   // Preloaded Image Cache for zero-lag canvas rendering
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
 
@@ -130,7 +146,33 @@ export default function StudioPage() {
   const frameTimestampsRef = useRef<number[]>([]);
   const lastMetricsUpdateRef = useRef<number>(0);
 
-  // Preload images into cache
+  // Fetch closet items from backend
+  const apiBase = typeof window !== "undefined"
+    ? `http://${window.location.hostname}:8000`
+    : "http://localhost:8000";
+
+  useEffect(() => {
+    async function loadCloset() {
+      try {
+        const res = await fetch(`${apiBase}/api/items`);
+        if (res.ok) {
+          const data = await res.json();
+          setClosetItems(data);
+          data.forEach((item: any) => {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.src = `${apiBase}${item.image_url}`;
+            imageCacheRef.current.set(item.id, img);
+          });
+        }
+      } catch (e) {
+        console.warn("Could not load closet items in studio:", e);
+      }
+    }
+    loadCloset();
+  }, [apiBase]);
+
+  // Preload catalog images into cache
   useEffect(() => {
     JEWELRY_CATALOG.forEach((item) => {
       if (!imageCacheRef.current.has(item.id)) {
@@ -486,8 +528,47 @@ export default function StudioPage() {
             } else {
               necklaceFilterRef.current.reset();
             }
+
+            // UPPER CLOTHING / DRESS FITTING:
+            const garmentItem = selectedItems.upper || selectedItems.dress;
+            if (garmentItem && (leftShoulder.visibility ?? 1) > 0.4 && (rightShoulder.visibility ?? 1) > 0.4) {
+              const lx = leftShoulder.x * canvas.width;
+              const ly = leftShoulder.y * canvas.height;
+              const rx = rightShoulder.x * canvas.width;
+              const ry = rightShoulder.y * canvas.height;
+
+              const shoulderDist = Math.hypot(rx - lx, ry - ly);
+              const midX = (lx + rx) / 2;
+              const midY = (ly + ry) / 2;
+              const rawAngle = Math.atan2(ry - ly, rx - lx);
+
+              const garmentScale = (shoulderDist * 2.2 * tuning.upperScale) / 300;
+              const targetY = midY + tuning.upperOffsetY;
+
+              const smoothedGarment = upperFilterRef.current.filter(
+                midX,
+                targetY,
+                garmentScale,
+                rawAngle,
+                timestamp
+              );
+
+              const gImg = imageCacheRef.current.get(garmentItem.id);
+              if (gImg && gImg.complete) {
+                ctx.save();
+                ctx.translate(smoothedGarment.x, smoothedGarment.y);
+                ctx.rotate(smoothedGarment.angle);
+                const gw = 300 * smoothedGarment.scale;
+                const gh = (gImg.height / Math.max(1, gImg.width)) * gw;
+                ctx.drawImage(gImg, -gw / 2, 0, gw, gh);
+                ctx.restore();
+              }
+            } else {
+              upperFilterRef.current.reset();
+            }
           } else {
             necklaceFilterRef.current.reset();
+            upperFilterRef.current.reset();
           }
         } catch (e) {}
       }
@@ -745,7 +826,22 @@ export default function StudioPage() {
     };
   }, [renderLoop]);
 
-  const currentCategoryItems = JEWELRY_CATALOG.filter((i) => i.type === activeCategory);
+  // Merge built-in catalog items with user closet items from backend
+  const currentCategoryItems = [
+    ...JEWELRY_CATALOG.filter((i) => i.type === activeCategory),
+    ...closetItems
+      .filter((i) => i.category === activeCategory)
+      .map((i) => ({
+        id: i.id,
+        type: i.category,
+        name: i.title,
+        category: i.category,
+        metal: "Closet Item",
+        gem: "Custom Cutout",
+        previewSvg: `${apiBase}${i.thumbnail_url}`,
+        svgDataUri: `${apiBase}${i.image_url}`
+      }))
+  ];
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white flex flex-col selection:bg-cyan-500/30">
@@ -773,6 +869,13 @@ export default function StudioPage() {
 
           {/* Action Header controls */}
           <div className="flex items-center gap-2.5">
+            <Link
+              href="/closet"
+              className="px-3 py-1.5 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors"
+            >
+              Closet
+            </Link>
+
             {/* Screenshot capture button */}
             <button
               onClick={captureScreenshot}
@@ -871,12 +974,16 @@ export default function StudioPage() {
                 </div>
                 <div className="flex-1 w-full h-full">
                   <Jewelry3DViewer
-                    itemType={activeCategory}
-                    metalColor={selectedItems[activeCategory]?.metal.includes("Gold") ? "#f59e0b" : "#e2e8f0"}
+                    itemType={
+                      (["earring", "necklace", "ring", "bracelet"].includes(activeCategory)
+                        ? activeCategory
+                        : "necklace") as "earring" | "necklace" | "ring" | "bracelet"
+                    }
+                    metalColor={selectedItems[activeCategory]?.metal?.includes("Gold") ? "#f59e0b" : "#e2e8f0"}
                     gemColor={
-                      selectedItems[activeCategory]?.gem.includes("Emerald")
+                      selectedItems[activeCategory]?.gem?.includes("Emerald")
                         ? "#10b981"
-                        : selectedItems[activeCategory]?.gem.includes("Ruby")
+                        : selectedItems[activeCategory]?.gem?.includes("Ruby")
                         ? "#f43f5e"
                         : "#38bdf8"
                     }
@@ -1011,19 +1118,21 @@ export default function StudioPage() {
             </div>
 
             {/* Category tabs */}
-            <div className="grid grid-cols-4 gap-1.5 p-1 bg-neutral-950/60 rounded-2xl border border-neutral-800/80 mb-3.5">
+            <div className="grid grid-cols-6 gap-1 p-1 bg-neutral-950/60 rounded-2xl border border-neutral-800/80 mb-3.5">
               {(
                 [
                   { id: "necklace", label: "Necklace" },
                   { id: "earring", label: "Earrings" },
                   { id: "ring", label: "Rings" },
-                  { id: "bracelet", label: "Bracelets" }
+                  { id: "bracelet", label: "Bracelets" },
+                  { id: "upper", label: "Tops" },
+                  { id: "dress", label: "Dresses" }
                 ] as const
               ).map((cat) => (
                 <button
                   key={cat.id}
-                  onClick={() => setActiveCategory(cat.id)}
-                  className={`py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                  onClick={() => setActiveCategory(cat.id as any)}
+                  className={`py-1.5 rounded-xl text-[11px] font-semibold transition-all ${
                     activeCategory === cat.id
                       ? "bg-cyan-500 text-neutral-950 shadow-md shadow-cyan-500/20"
                       : "text-neutral-400 hover:text-white"

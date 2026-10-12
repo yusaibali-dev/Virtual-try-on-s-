@@ -31,6 +31,12 @@ export default function Home() {
 
           <div className="flex items-center gap-3">
             <Link
+              href="/closet"
+              className="px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 font-medium text-xs transition-all"
+            >
+              AI Closet
+            </Link>
+            <Link
               href="/studio"
               className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-semibold text-xs transition-all shadow-lg shadow-cyan-500/25 flex items-center gap-1.5"
             >
@@ -45,26 +51,32 @@ export default function Home() {
       <main className="flex-1 max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20 flex flex-col items-center text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-medium mb-6 animate-pulse">
           <Zap className="w-3.5 h-3.5" />
-          <span>Milestone 1 Ready: Live On-Device Vision & Camera Pipeline</span>
+          <span>Milestone 3 Live: Web Item Scraper & Background Cutout Closet</span>
         </div>
 
         <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight max-w-3xl leading-tight sm:leading-tight">
-          Next-Gen AI Virtual Try-On & Landmark Tracking
+          Next-Gen AI Virtual Try-On & Digital Wardrobe
         </h1>
 
         <p className="mt-5 text-base sm:text-lg text-neutral-400 max-w-2xl leading-relaxed">
-          High-performance on-device computer vision powered by MediaPipe Vision, designed for zero latency mobile camera tracking, body fitting, and VTON diffusion pipelines.
+          Import any clothing item, jewelry piece, or hairstyle from the web with instant AI background removal, or try on our live on-device vision studio.
         </p>
 
         {/* Action Buttons */}
         <div className="mt-8 flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto">
           <Link
+            href="/closet"
+            className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold text-sm transition-all shadow-xl shadow-cyan-500/20 flex items-center justify-center gap-2"
+          >
+            <span>Open AI Closet</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+          <Link
             href="/studio"
-            className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold text-sm transition-all shadow-xl shadow-cyan-500/20 flex items-center justify-center gap-2"
+            className="w-full sm:w-auto px-7 py-3.5 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 font-medium text-sm transition-all flex items-center justify-center gap-2"
           >
             <Camera className="w-4 h-4" />
             <span>Launch Camera Studio</span>
-            <ArrowRight className="w-4 h-4" />
           </Link>
 
           <a
