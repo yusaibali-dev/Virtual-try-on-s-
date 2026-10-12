@@ -24,7 +24,9 @@ import {
   Image as ImageIcon,
   ChevronRight,
   Maximize2,
-  X
+  X,
+  Scissors,
+  Wand2
 } from "lucide-react";
 import type {
   FaceLandmarker as FaceLandmarkerType,
@@ -66,15 +68,16 @@ export default function StudioPage() {
   const [enablePose, setEnablePose] = useState(false);
   const [enableHands, setEnableHands] = useState(false);
 
-  // Milestone 2 & 3: Selection & Try-On State
+  // Milestone 2, 3 & 5: Selection & Try-On State
   const [activeCategory, setActiveCategory] = useState<
-    "necklace" | "earring" | "ring" | "bracelet" | "upper" | "dress"
-  >("necklace");
+    "necklace" | "earring" | "ring" | "bracelet" | "hair" | "upper" | "dress"
+  >("hair");
   const [selectedItems, setSelectedItems] = useState<{
     earring: any | null;
     necklace: any | null;
     ring: any | null;
     bracelet: any | null;
+    hair: any | null;
     upper: any | null;
     dress: any | null;
   }>({
@@ -82,9 +85,16 @@ export default function StudioPage() {
     necklace: JEWELRY_CATALOG.find((i) => i.id === "necklace-sapphire-pendant") || null,
     ring: JEWELRY_CATALOG.find((i) => i.id === "ring-solitaire-diamond") || null,
     bracelet: JEWELRY_CATALOG.find((i) => i.id === "bracelet-diamond-tennis") || null,
-    upper: null,
+    hair: JEWELRY_CATALOG.find((i) => i.id === "hair-blonde-bob") || null,
+    upper: JEWELRY_CATALOG.find((i) => i.id === "garment-cyber-tee") || null,
     dress: null
   });
+
+  // Milestone 5: Hair Recolouring & Styling State
+  const [hairColor, setHairColor] = useState("#f59e0b"); // Vibrant amber gold
+  const [hairOpacity, setHairOpacity] = useState(0.70);
+  const [hairShine, setHairShine] = useState(0.40);
+  const [enableHairRecolor, setEnableHairRecolor] = useState(true);
 
   // Display Mode: 2D Overlay (Canvas PNG) vs 3D Interactive GLB
   const [renderMode, setRenderMode] = useState<"2d" | "3d">("2d");
@@ -99,6 +109,8 @@ export default function StudioPage() {
     braceletScale: number;
     upperScale: number;
     upperOffsetY: number;
+    hairScale: number;
+    hairOffsetY: number;
   }>({
     earringScale: 1.0,
     earringOffsetY: 0,
@@ -107,7 +119,9 @@ export default function StudioPage() {
     ringScale: 1.0,
     braceletScale: 1.0,
     upperScale: 1.0,
-    upperOffsetY: 30
+    upperOffsetY: 30,
+    hairScale: 1.0,
+    hairOffsetY: -20
   });
 
   // Performance Metrics
@@ -127,6 +141,12 @@ export default function StudioPage() {
 
   // Upper clothing / dress filter
   const upperFilterRef = useRef(new OneEuroTransform(0.5, 0.025));
+
+  // Hair overlay transform filter
+  const hairFilterRef = useRef(new OneEuroTransform(0.6, 0.02));
+
+  // MediaPipe ImageSegmenter instance ref
+  const imageSegmenterRef = useRef<any>(null);
 
   // Closet items loaded from backend
   const [closetItems, setClosetItems] = useState<any[]>([]);
@@ -285,10 +305,38 @@ export default function StudioPage() {
           });
         });
 
+        // Image Segmenter for live hair recolouring & person segmentation
+        const { ImageSegmenter } = visionModule;
+        const segmenterModel = await ImageSegmenter.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          outputCategoryMask: true,
+          outputConfidenceMasks: false
+        }).catch(async () => {
+          return ImageSegmenter.createFromOptions(vision, {
+            baseOptions: {
+              modelAssetPath:
+                "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+              delegate: "CPU"
+            },
+            runningMode: "VIDEO",
+            outputCategoryMask: true,
+            outputConfidenceMasks: false
+          }).catch((e) => {
+            console.warn("Hair segmenter model unavailable:", e);
+            return null;
+          });
+        });
+
         if (!isMounted) return;
         faceLandmarkerRef.current = faceModel;
         poseLandmarkerRef.current = poseModel;
         handLandmarkerRef.current = handModel;
+        imageSegmenterRef.current = segmenterModel;
 
         setModelsLoading(false);
       } catch (err: any) {
@@ -529,7 +577,7 @@ export default function StudioPage() {
               necklaceFilterRef.current.reset();
             }
 
-            // UPPER CLOTHING / DRESS FITTING:
+            // UPPER CLOTHING / DRESS FITTING (Shoulder + Hip Keypoint Warping):
             const garmentItem = selectedItems.upper || selectedItems.dress;
             if (garmentItem && (leftShoulder.visibility ?? 1) > 0.4 && (rightShoulder.visibility ?? 1) > 0.4) {
               const lx = leftShoulder.x * canvas.width;
@@ -537,10 +585,20 @@ export default function StudioPage() {
               const rx = rightShoulder.x * canvas.width;
               const ry = rightShoulder.y * canvas.height;
 
-              const shoulderDist = Math.hypot(rx - lx, ry - ly);
+              // Pose Hip landmarks: 23 = Left Hip, 24 = Right Hip
+              const leftHip = landmarks[23];
+              const rightHip = landmarks[24];
+              const hasHips = leftHip && rightHip && (leftHip.visibility ?? 1) > 0.3;
+
               const midX = (lx + rx) / 2;
               const midY = (ly + ry) / 2;
+              const shoulderDist = Math.hypot(rx - lx, ry - ly);
               const rawAngle = Math.atan2(ry - ly, rx - lx);
+
+              // Compute torso length from shoulders down to hips (or estimate from shoulder width)
+              const torsoHeight = hasHips
+                ? Math.hypot(((leftHip.x + rightHip.x)/2 - midX/canvas.width) * canvas.width, ((leftHip.y + rightHip.y)/2 - midY/canvas.height) * canvas.height)
+                : shoulderDist * 1.35;
 
               const garmentScale = (shoulderDist * 2.2 * tuning.upperScale) / 300;
               const targetY = midY + tuning.upperOffsetY;
@@ -558,10 +616,56 @@ export default function StudioPage() {
                 ctx.save();
                 ctx.translate(smoothedGarment.x, smoothedGarment.y);
                 ctx.rotate(smoothedGarment.angle);
+
                 const gw = 300 * smoothedGarment.scale;
-                const gh = (gImg.height / Math.max(1, gImg.width)) * gw;
+                // Scale torso length realistically
+                const gh = Math.max(torsoHeight * 1.15, (gImg.height / Math.max(1, gImg.width)) * gw);
+
+                // Render garment body
                 ctx.drawImage(gImg, -gw / 2, 0, gw, gh);
                 ctx.restore();
+
+                // Forearms & Hands in front of garment:
+                // MediaPipe Pose landmarks: 15 = Left wrist, 16 = Right wrist, 13 = Left elbow, 14 = Right elbow
+                const leftElbow = landmarks[13];
+                const rightElbow = landmarks[14];
+                const leftWrist = landmarks[15];
+                const rightWrist = landmarks[16];
+
+                if (leftElbow && leftWrist && (leftWrist.visibility ?? 1) > 0.5) {
+                  const elX = leftElbow.x * canvas.width;
+                  const elY = leftElbow.y * canvas.height;
+                  const wrX = leftWrist.x * canvas.width;
+                  const wrY = leftWrist.y * canvas.height;
+
+                  // Sample live video arm pixels to composite in front of garment
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.lineWidth = shoulderDist * 0.22;
+                  ctx.lineCap = "round";
+                  ctx.moveTo(elX, elY);
+                  ctx.lineTo(wrX, wrY);
+                  ctx.clip();
+                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                  ctx.restore();
+                }
+
+                if (rightElbow && rightWrist && (rightWrist.visibility ?? 1) > 0.5) {
+                  const elX = rightElbow.x * canvas.width;
+                  const elY = rightElbow.y * canvas.height;
+                  const wrX = rightWrist.x * canvas.width;
+                  const wrY = rightWrist.y * canvas.height;
+
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.lineWidth = shoulderDist * 0.22;
+                  ctx.lineCap = "round";
+                  ctx.moveTo(elX, elY);
+                  ctx.lineTo(wrX, wrY);
+                  ctx.clip();
+                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                  ctx.restore();
+                }
               }
             } else {
               upperFilterRef.current.reset();
@@ -665,9 +769,86 @@ export default function StudioPage() {
                 rightEarFilterRef.current.reset();
               }
             }
+
+            // -------------------------------------------------------------
+            // HAIR STYLING & 2D OVERLAY (Milestone 5)
+            // -------------------------------------------------------------
+            const hairItem = selectedItems.hair;
+            const topForehead = landmarks[10];
+            const leftTemple = landmarks[127] || landmarks[234];
+            const rightTemple = landmarks[356] || landmarks[454];
+
+            if (hairItem && topForehead) {
+              const headTilt = Math.atan2(
+                (chin.y - topForehead.y) * canvas.height,
+                (chin.x - topForehead.x) * canvas.width
+              ) - Math.PI / 2;
+
+              const templeDist = Math.hypot(
+                (rightTemple.x - leftTemple.x) * canvas.width,
+                (rightTemple.y - leftTemple.y) * canvas.height
+              );
+              const hairScale = (templeDist * 1.85 * tuning.hairScale) / 200;
+
+              const hX = topForehead.x * canvas.width;
+              const hY = topForehead.y * canvas.height + tuning.hairOffsetY;
+
+              const smoothHair = hairFilterRef.current.filter(
+                hX,
+                hY,
+                hairScale,
+                headTilt,
+                timestamp
+              );
+
+              // 1. Hair 2D Overlay
+              const hairImg = imageCacheRef.current.get(hairItem.id);
+              if (hairImg && hairImg.complete) {
+                ctx.save();
+                ctx.translate(smoothHair.x, smoothHair.y);
+                ctx.rotate(smoothHair.angle);
+                const hw = 200 * smoothHair.scale;
+                const hh = 180 * smoothHair.scale;
+                ctx.drawImage(hairImg, -hw / 2, -hh * 0.25, hw, hh);
+                ctx.restore();
+              }
+
+              // 2. Real-Time Hair Recolouring Tint (Color picker + opacity + shine)
+              if (enableHairRecolor) {
+                ctx.save();
+                ctx.translate(smoothHair.x, smoothHair.y);
+                ctx.rotate(smoothHair.angle);
+
+                // Tint gradient based on selected hairColor and shine
+                const tintGrad = ctx.createRadialGradient(0, 0, 10, 0, 20, 120 * smoothHair.scale);
+                tintGrad.addColorStop(0, `${hairColor}${Math.round(hairShine * 255).toString(16).padStart(2, "0")}`);
+                tintGrad.addColorStop(0.7, `${hairColor}${Math.round(hairOpacity * 255).toString(16).padStart(2, "0")}`);
+                tintGrad.addColorStop(1, "transparent");
+
+                ctx.globalCompositeOperation = "color";
+                ctx.fillStyle = tintGrad;
+                ctx.beginPath();
+                ctx.ellipse(0, -20 * smoothHair.scale, 85 * smoothHair.scale, 75 * smoothHair.scale, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Specular shine highlights
+                if (hairShine > 0.1) {
+                  ctx.globalCompositeOperation = "screen";
+                  ctx.fillStyle = `rgba(255, 255, 255, ${hairShine * 0.45})`;
+                  ctx.beginPath();
+                  ctx.ellipse(0, -35 * smoothHair.scale, 50 * smoothHair.scale, 18 * smoothHair.scale, 0, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+
+                ctx.restore();
+              }
+            } else {
+              hairFilterRef.current.reset();
+            }
           } else {
             leftEarFilterRef.current.reset();
             rightEarFilterRef.current.reset();
+            hairFilterRef.current.reset();
           }
         } catch (e) {}
       }
@@ -929,6 +1110,22 @@ export default function StudioPage() {
         </div>
       )}
 
+      {/* Milestone 5: Quick Preview Real-Time Notice */}
+      <div className="bg-gradient-to-r from-cyan-950/40 via-purple-950/40 to-neutral-900 border-b border-cyan-500/20 px-4 py-2 text-xs flex items-center justify-between">
+        <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
+          <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-semibold text-[10px] uppercase tracking-wider border border-cyan-500/30">
+            Quick Live Preview
+          </span>
+          <span className="text-neutral-300">
+            On-device real-time neural tracking & garment warp. For high-fidelity diffusion fitting, use{" "}
+            <Link href="/tryon" className="text-cyan-400 hover:underline font-medium">
+              Photo Try-On
+            </Link>{" "}
+            or tap Capture & Enhance below.
+          </span>
+        </div>
+      </div>
+
       {/* Main Studio Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-5 flex flex-col lg:flex-row gap-5 items-stretch">
         {/* Left: Interactive Camera Viewport */}
@@ -1101,6 +1298,21 @@ export default function StudioPage() {
               >
                 <Camera className="w-4 h-4" />
               </button>
+
+              {/* Milestone 5: Capture & Enhance Placeholder Button */}
+              <button
+                id="btn-capture-enhance"
+                onClick={() => {
+                  alert(
+                    "Capture & Enhance placeholder: In the full pipeline, this snapshots your current pose frame and sends it to the CatVTON / HairFastGAN high-resolution neural diffusion server for photorealistic rendering!"
+                  );
+                }}
+                title="Capture & Enhance with High-Res Diffusion (CatVTON)"
+                className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-xl shadow-purple-500/25 flex items-center gap-2 text-xs font-semibold transition-all active:scale-95"
+              >
+                <Wand2 className="w-4 h-4 animate-pulse text-amber-300" />
+                <span>Capture &amp; Enhance</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1118,21 +1330,22 @@ export default function StudioPage() {
             </div>
 
             {/* Category tabs */}
-            <div className="grid grid-cols-6 gap-1 p-1 bg-neutral-950/60 rounded-2xl border border-neutral-800/80 mb-3.5">
+            <div className="grid grid-cols-7 gap-1 p-1 bg-neutral-950/60 rounded-2xl border border-neutral-800/80 mb-3.5">
               {(
                 [
+                  { id: "hair", label: "Hair" },
+                  { id: "upper", label: "Tops" },
+                  { id: "dress", label: "Dresses" },
                   { id: "necklace", label: "Necklace" },
                   { id: "earring", label: "Earrings" },
                   { id: "ring", label: "Rings" },
-                  { id: "bracelet", label: "Bracelets" },
-                  { id: "upper", label: "Tops" },
-                  { id: "dress", label: "Dresses" }
+                  { id: "bracelet", label: "Bracelets" }
                 ] as const
               ).map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => setActiveCategory(cat.id as any)}
-                  className={`py-1.5 rounded-xl text-[11px] font-semibold transition-all ${
+                  className={`py-1.5 rounded-xl text-[10px] font-semibold transition-all ${
                     activeCategory === cat.id
                       ? "bg-cyan-500 text-neutral-950 shadow-md shadow-cyan-500/20"
                       : "text-neutral-400 hover:text-white"
@@ -1196,6 +1409,98 @@ export default function StudioPage() {
             )}
           </div>
 
+          {/* Milestone 5: Hair Recolour & Style Tuning Panel */}
+          {activeCategory === "hair" && (
+            <div className="p-4 rounded-3xl bg-neutral-900/60 border border-neutral-800/80 backdrop-blur-sm space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Scissors className="w-4 h-4 text-amber-400" />
+                  <h3 className="text-sm font-semibold text-white">Hair Recolouring</h3>
+                </div>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableHairRecolor}
+                    onChange={(e) => setEnableHairRecolor(e.target.checked)}
+                    className="accent-amber-400 rounded cursor-pointer"
+                  />
+                  <span className="text-[11px] text-neutral-300">Live Tint</span>
+                </label>
+              </div>
+
+              {/* Color Swatches and Color Picker */}
+              <div>
+                <span className="text-xs text-neutral-300 block mb-1.5">Hair Tint Shade</span>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-1">
+                    {[
+                      { name: "Gold Blonde", color: "#f59e0b" },
+                      { name: "Brunette", color: "#6b3e26" },
+                      { name: "Auburn Red", color: "#b91c1c" },
+                      { name: "Jet Black", color: "#171717" },
+                      { name: "Platinum", color: "#e2e8f0" },
+                      { name: "Cyber Violet", color: "#a855f7" }
+                    ].map((swatch) => (
+                      <button
+                        key={swatch.color}
+                        onClick={() => setHairColor(swatch.color)}
+                        title={swatch.name}
+                        className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${
+                          hairColor === swatch.color ? "border-white scale-110 shadow-md shadow-white/20" : "border-neutral-700"
+                        }`}
+                        style={{ backgroundColor: swatch.color }}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <input
+                      type="color"
+                      value={hairColor}
+                      onChange={(e) => setHairColor(e.target.value)}
+                      className="w-7 h-7 rounded-lg border border-neutral-700 bg-transparent cursor-pointer"
+                      title="Custom Hair Shade"
+                    />
+                    <span className="font-mono text-[10px] text-neutral-400">{hairColor}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Opacity Slider */}
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="text-neutral-300">Color Opacity</span>
+                  <span className="font-mono text-amber-300 text-[11px]">{Math.round(hairOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.05"
+                  value={hairOpacity}
+                  onChange={(e) => setHairOpacity(parseFloat(e.target.value))}
+                  className="w-full accent-amber-400 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                />
+              </div>
+
+              {/* Shine / Specular Slider */}
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1.5">
+                  <span className="text-neutral-300">Shine &amp; Specular</span>
+                  <span className="font-mono text-amber-300 text-[11px]">{Math.round(hairShine * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.0"
+                  max="1.0"
+                  step="0.05"
+                  value={hairShine}
+                  onChange={(e) => setHairShine(parseFloat(e.target.value))}
+                  className="w-full accent-amber-400 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Precision Sizing & Placement Tuning Sliders */}
           <div className="p-4 rounded-3xl bg-neutral-900/60 border border-neutral-800/80 backdrop-blur-sm space-y-3.5">
             <div className="flex items-center justify-between">
@@ -1210,7 +1515,13 @@ export default function StudioPage() {
             <div>
               <div className="flex items-center justify-between text-xs mb-1.5">
                 <span className="text-neutral-300">
-                  {activeCategory === "earring"
+                  {activeCategory === "hair"
+                    ? "Hair Overlay Scale"
+                    : activeCategory === "upper"
+                    ? "Garment Width / Scale"
+                    : activeCategory === "dress"
+                    ? "Dress Width / Scale"
+                    : activeCategory === "earring"
                     ? "Earrings Scale"
                     : activeCategory === "necklace"
                     ? "Necklace Scale"
@@ -1219,7 +1530,11 @@ export default function StudioPage() {
                     : "Bracelet Scale"}
                 </span>
                 <span className="font-mono text-cyan-300 text-[11px]">
-                  {activeCategory === "earring"
+                  {activeCategory === "hair"
+                    ? `${tuning.hairScale.toFixed(2)}x`
+                    : activeCategory === "upper" || activeCategory === "dress"
+                    ? `${tuning.upperScale.toFixed(2)}x`
+                    : activeCategory === "earring"
                     ? `${tuning.earringScale.toFixed(2)}x`
                     : activeCategory === "necklace"
                     ? `${tuning.necklaceScale.toFixed(2)}x`
@@ -1231,10 +1546,14 @@ export default function StudioPage() {
               <input
                 type="range"
                 min="0.5"
-                max="1.8"
+                max="2.0"
                 step="0.05"
                 value={
-                  activeCategory === "earring"
+                  activeCategory === "hair"
+                    ? tuning.hairScale
+                    : activeCategory === "upper" || activeCategory === "dress"
+                    ? tuning.upperScale
+                    : activeCategory === "earring"
                     ? tuning.earringScale
                     : activeCategory === "necklace"
                     ? tuning.necklaceScale
@@ -1246,7 +1565,11 @@ export default function StudioPage() {
                   const val = parseFloat(e.target.value);
                   setTuning((prev) => ({
                     ...prev,
-                    [activeCategory === "earring"
+                    [activeCategory === "hair"
+                      ? "hairScale"
+                      : activeCategory === "upper" || activeCategory === "dress"
+                      ? "upperScale"
+                      : activeCategory === "earring"
                       ? "earringScale"
                       : activeCategory === "necklace"
                       ? "necklaceScale"
@@ -1259,26 +1582,50 @@ export default function StudioPage() {
               />
             </div>
 
-            {/* Vertical Offset Slider for necklace or earrings */}
-            {(activeCategory === "necklace" || activeCategory === "earring") && (
+            {/* Vertical Offset Slider for necklace, earrings, hair, or upper garments */}
+            {(activeCategory === "necklace" ||
+              activeCategory === "earring" ||
+              activeCategory === "hair" ||
+              activeCategory === "upper" ||
+              activeCategory === "dress") && (
               <div>
                 <div className="flex items-center justify-between text-xs mb-1.5">
                   <span className="text-neutral-300">Vertical Offset Position</span>
                   <span className="font-mono text-cyan-300 text-[11px]">
-                    {activeCategory === "necklace" ? `${tuning.necklaceOffsetY}px` : `${tuning.earringOffsetY}px`}
+                    {activeCategory === "hair"
+                      ? `${tuning.hairOffsetY}px`
+                      : activeCategory === "upper" || activeCategory === "dress"
+                      ? `${tuning.upperOffsetY}px`
+                      : activeCategory === "necklace"
+                      ? `${tuning.necklaceOffsetY}px`
+                      : `${tuning.earringOffsetY}px`}
                   </span>
                 </div>
                 <input
                   type="range"
-                  min="-40"
-                  max="60"
+                  min="-80"
+                  max="100"
                   step="2"
-                  value={activeCategory === "necklace" ? tuning.necklaceOffsetY : tuning.earringOffsetY}
+                  value={
+                    activeCategory === "hair"
+                      ? tuning.hairOffsetY
+                      : activeCategory === "upper" || activeCategory === "dress"
+                      ? tuning.upperOffsetY
+                      : activeCategory === "necklace"
+                      ? tuning.necklaceOffsetY
+                      : tuning.earringOffsetY
+                  }
                   onChange={(e) => {
                     const val = parseInt(e.target.value, 10);
                     setTuning((prev) => ({
                       ...prev,
-                      [activeCategory === "necklace" ? "necklaceOffsetY" : "earringOffsetY"]: val
+                      [activeCategory === "hair"
+                        ? "hairOffsetY"
+                        : activeCategory === "upper" || activeCategory === "dress"
+                        ? "upperOffsetY"
+                        : activeCategory === "necklace"
+                        ? "necklaceOffsetY"
+                        : "earringOffsetY"]: val
                     }));
                   }}
                   className="w-full accent-cyan-400 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"

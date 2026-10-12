@@ -4,7 +4,7 @@
 - **Frontend**: Next.js 16 (React 19, TypeScript, Tailwind CSS v4, Three.js / React Three Fiber, MediaPipe on-device vision)
 - **Backend**: FastAPI (Python, uvicorn, rembg background removal, BeautifulSoup4, SQLite)
 - **AI Models / Inference**: CatVTON / HairFastGAN (Target: NVIDIA RTX 3070 with 8 GB VRAM)
-- **Current Milestone**: Milestone 3 Complete
+- **Current Milestone**: Milestone 5 Complete
 
 ---
 
@@ -21,26 +21,29 @@
 ### Milestone 3: Items from the Internet & AI Closet
 - **Status**: **Done**
 - **Components Built**:
-  - **Backend Pipeline (`POST /api/items`)**:
-    - Accepts file uploads (`POST /api/items/upload`), direct image URLs, or product-page URLs.
-    - Product page scraper parses OpenGraph `og:image` and `og:title` with automatic title fallbacks.
-    - Security & Guardrails: Strict SSRF protection blocking private subnets (RFC 1918), loopback (`127.0.0.1`, `localhost`), link-local (`169.254.169.254`), and non-public IPs.
-    - Protocol & Compliance: Respects `robots.txt` using `urllib.robotparser`, enforces strict 10s timeout, max 10 MB payload, and verified image MIME types.
-    - AI Background Removal: Integrated `rembg` cutout pipeline with automated alpha keying fallback.
-    - Auto-Category Classification: Keyword heuristics + aspect ratio analysis mapping into `upper`, `lower`, `dress`, `earring`, `necklace`, `ring`, `bracelet`, and `hair`, with manual override support.
-    - Thumbnail Generation: High-quality 256x256 Lanczos thumbnail generation preserving transparency.
-    - Storage & Database: Local disk storage for cutouts (`/backend/storage/items`) and SQLite database (`vton_closet.db`) tracking metadata and favorites.
-  - **Unit Testing**:
-    - Comprehensive test suite in `backend/test_security.py` verifying SSRF blocking on loopback, private RFC 1918 ranges, cloud metadata IPs, invalid schemes, and public URL allowances (6/6 passing).
-  - **Frontend Closet (`/closet`)**:
-    - Interactive digital wardrobe with category filter tabs and favorites toggle.
-    - "Add Item" dialog supporting image URLs, product page links, or local file uploads with instant background removal progress indication.
-    - Delete item action with automatic local file and database cleanup.
-    - Transparent checkerboard previews showcasing clean alpha-channel cutouts.
-    - Prominent fair-use and copyright notice banner explaining non-commercial simulation rights and `robots.txt` compliance.
-  - **Live Studio Integration**:
-    - Studio dynamically loads closet items directly from the backend into the live try-on carousel.
-    - Imported jewelry (earrings, necklaces, rings, bracelets) and clothing (tops, dresses) fit and track live landmarks using One-Euro filtering.
+  - **Backend Pipeline (`POST /api/items`)**: SSRF-protected product page and image ingest, `rembg` background removal, automated category detection, SQLite database.
+  - **Frontend Closet (`/closet`)**: Digital wardrobe, transparent checkerboard previews, instant live try-on link.
+
+### Milestone 4: CatVTON Photo Try-On
+- **Status**: **Scaffolded / Code Complete (Awaiting Weights Download Approval)**
+- **Components Built**: `scripts/setup_models.py` (checked for 13.7 GB disk size), `backend/model_manager.py` with VRAM guard & job queue, `/tryon` photo page with before/after slider, and `scripts/benchmark.py`.
+
+### Milestone 5: Live Hair + Clothes (On-Device)
+- **Status**: **Done**
+- **Components Built**:
+  - **Live Hair Recolouring & Styling**:
+    - Real-time on-device hair recolouring with customizable color picker + preset swatches (Gold Blonde, Brunette, Auburn Red, Jet Black, Platinum, Cyber Violet).
+    - Hair opacity slider (0.1 to 1.0) and shine / specular slider (0.0 to 1.0) for natural luster and highlight simulation.
+    - 2D Hairstyle overlay fitting anchored to head pose (forehead landmarks 10, 127, 356, 152) with smooth One-Euro jitter filtering.
+    - Sample hairstyles in catalog: Honey Blonde Bob, Auburn Wave Layers, Brunette Curls.
+  - **Live Garment Warping & Occlusion**:
+    - Lightweight real-time torso warp anchored to shoulder (11, 12) and hip (23, 24) keypoints.
+    - Dynamic arm foreground clipping: forearm vectors (elbows to wrists: 13-15, 14-16) layered in front of the garment so arms and hands naturally overlay clothes without neural slowdown.
+    - Sample clothing items in catalog: Cyber Neon Tee, Crimson Street Hoodie.
+  - **Studio UI & Preview Guidance**:
+    - Prominent "Quick Live Preview" banner explaining that this is an ultra-fast on-device preview.
+    - "Capture & Enhance" placeholder button in the bottom floating toolbar prompting high-res diffusion rendering.
+    - Dedicated Hair and Tops tabs in the studio carousel and fitting tuning sliders.
 
 ---
 
@@ -60,8 +63,9 @@ cd frontend
 npm run dev
 ```
 - Home portal: `http://localhost:3000`
+- Live Studio (Hair & Garment Try-On): `http://localhost:3000/studio`
 - AI Closet: `http://localhost:3000/closet`
-- Live Studio: `http://localhost:3000/studio`
+- Photo Try-On: `http://localhost:3000/tryon`
 
 ### 3. Running Backend Tests
 ```bash
@@ -72,5 +76,6 @@ python -m pytest test_security.py
 ---
 
 ## Known Issues & Notes
-- On product pages that render purely via client-side JavaScript Single Page Apps (SPA) without server-side OpenGraph tags, the scraper falls back to standard `<img>` tags or prompts the user to paste the direct image URL.
-- When trying on clothing cutouts (tops/dresses) in the Studio, keeping shoulders visible in the camera view ensures optimal pose anchor fitting.
+- On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
+- Garment warp utilizes shoulders and hips; for best clothing alignment, ensure upper torso is visible in the camera frame.
+

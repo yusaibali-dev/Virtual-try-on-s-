@@ -29,19 +29,26 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <Link
+              href="/tryon"
+              className="px-3.5 py-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-semibold text-xs transition-all flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Photo Try-On</span>
+            </Link>
             <Link
               href="/closet"
-              className="px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 font-medium text-xs transition-all"
+              className="px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-neutral-800 font-medium text-xs transition-all"
             >
-              AI Closet
+              Closet
             </Link>
             <Link
               href="/studio"
-              className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-semibold text-xs transition-all shadow-lg shadow-cyan-500/25 flex items-center gap-1.5"
+              className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-neutral-950 font-semibold text-xs transition-all shadow-lg shadow-cyan-500/25 flex items-center gap-1.5"
             >
-              <Camera className="w-4 h-4" />
-              <span>Open Studio</span>
+              <Camera className="w-3.5 h-3.5" />
+              <span>Studio</span>
             </Link>
           </div>
         </div>

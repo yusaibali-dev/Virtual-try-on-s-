@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 
-// Jewelry assets catalog
+// Jewelry & live try-on assets catalog
 export interface JewelryItem {
   id: string;
-  type: 'earring' | 'necklace' | 'ring' | 'bracelet';
+  type: 'earring' | 'necklace' | 'ring' | 'bracelet' | 'hair' | 'upper' | 'dress';
   name: string;
   category: string;
   metal: string;
@@ -584,5 +584,59 @@ export const JEWELRY_CATALOG: JewelryItem[] = [
     gem: 'Heavy Gauge Links',
     previewSvg: createBraceletSvg('#FBBF24', '#B45309', 'chain'),
     svgDataUri: createBraceletSvg('#FBBF24', '#B45309', 'chain')
+  },
+
+  // 5. HAIR OVERLAYS (6 Sample Hairstyles)
+  {
+    id: 'hair-blonde-bob',
+    type: 'hair',
+    name: 'Champagne Sleek Bob',
+    category: 'Hair',
+    metal: 'Blonde #FDE047',
+    gem: 'Short Hair',
+    previewSvg: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 180"><path d="M 50 140 C 30 80 50 20 100 20 C 150 20 170 80 150 140 C 135 110 140 70 100 70 C 60 70 65 110 50 140 Z" fill="#FDE047" stroke="#CA8A04" stroke-width="3"/></svg>')}`,
+    svgDataUri: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 180"><path d="M 50 140 C 30 80 50 20 100 20 C 150 20 170 80 150 140 C 135 110 140 70 100 70 C 60 70 65 110 50 140 Z" fill="#FDE047" stroke="#CA8A04" stroke-width="3"/></svg>')}`
+  },
+  {
+    id: 'hair-auburn-waves',
+    type: 'hair',
+    name: 'Auburn Cascade Waves',
+    category: 'Hair',
+    metal: 'Auburn #B91C1C',
+    gem: 'Wavy Long',
+    previewSvg: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220"><path d="M 40 180 C 20 90 40 15 100 15 C 160 15 180 90 160 180 C 140 120 135 65 100 65 C 65 65 60 120 40 180 Z" fill="#B91C1C" stroke="#7F1D1D" stroke-width="3"/></svg>')}`,
+    svgDataUri: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220"><path d="M 40 180 C 20 90 40 15 100 15 C 160 15 180 90 160 180 C 140 120 135 65 100 65 C 65 65 60 120 40 180 Z" fill="#B91C1C" stroke="#7F1D1D" stroke-width="3"/></svg>')}`
+  },
+  {
+    id: 'hair-brunette-curls',
+    type: 'hair',
+    name: 'Espresso Voluminous Curls',
+    category: 'Hair',
+    metal: 'Espresso #451A03',
+    gem: 'Curly Medium',
+    previewSvg: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 190"><path d="M 45 150 C 15 80 40 15 100 15 C 160 15 185 80 155 150 C 140 90 130 60 100 60 C 70 60 60 90 45 150 Z" fill="#451A03" stroke="#290E02" stroke-width="3"/></svg>')}`,
+    svgDataUri: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 190"><path d="M 45 150 C 15 80 40 15 100 15 C 160 15 185 80 155 150 C 140 90 130 60 100 60 C 70 60 60 90 45 150 Z" fill="#451A03" stroke="#290E02" stroke-width="3"/></svg>')}`
+  },
+
+  // 6. CLOTHING TOPS / SHIRTS (Sample Garments)
+  {
+    id: 'garment-cyber-tee',
+    type: 'upper',
+    name: 'Cyan Atelier Graphic Top',
+    category: 'Tops',
+    metal: 'Cotton Tech',
+    gem: 'Upper Body',
+    previewSvg: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200"><path d="M 70 20 L 100 40 L 140 40 L 170 20 L 225 70 L 195 105 L 175 90 L 175 190 L 65 190 L 65 90 L 45 105 L 15 70 Z" fill="#06B6D4" stroke="#0891B2" stroke-width="4"/><circle cx="120" cy="115" r="24" fill="#FFFFFF" opacity="0.3"/></svg>')}`,
+    svgDataUri: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200"><path d="M 70 20 L 100 40 L 140 40 L 170 20 L 225 70 L 195 105 L 175 90 L 175 190 L 65 190 L 65 90 L 45 105 L 15 70 Z" fill="#06B6D4" stroke="#0891B2" stroke-width="4"/><circle cx="120" cy="115" r="24" fill="#FFFFFF" opacity="0.3"/></svg>')}`
+  },
+  {
+    id: 'garment-crimson-hoodie',
+    type: 'upper',
+    name: 'Crimson Streetwear Overshirt',
+    category: 'Tops',
+    metal: 'Heavy Fleece',
+    gem: 'Upper Body',
+    previewSvg: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200"><path d="M 65 20 L 100 35 L 140 35 L 175 20 L 230 75 L 200 110 L 180 95 L 180 195 L 60 195 L 60 95 L 40 110 L 10 75 Z" fill="#E11D48" stroke="#9F1239" stroke-width="4"/><rect x="80" y="130" width="80" height="40" rx="8" fill="#FFFFFF" opacity="0.2"/></svg>')}`,
+    svgDataUri: `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200"><path d="M 65 20 L 100 35 L 140 35 L 175 20 L 230 75 L 200 110 L 180 95 L 180 195 L 60 195 L 60 95 L 40 110 L 10 75 Z" fill="#E11D48" stroke="#9F1239" stroke-width="4"/><rect x="80" y="130" width="80" height="40" rx="8" fill="#FFFFFF" opacity="0.2"/></svg>')}`
   }
 ];

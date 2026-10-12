@@ -246,5 +246,173 @@ def remove_closet_item(item_id: str):
 
     return {"deleted": True, "id": item_id}
 
+# -------------------------------------------------------------
+# Milestone 4: CatVTON Photo Try-On & Job Queue Endpoints
+# -------------------------------------------------------------
+from sse_starlette.sse import EventSourceResponse
+from model_manager import model_manager
+import json
+import asyncio
+from PIL import Image
+import io
+
+TRYON_DIR = os.path.join(os.path.dirname(__file__), "storage", "tryon")
+os.makedirs(TRYON_DIR, exist_ok=True)
+app.mount("/storage/tryon", StaticFiles(directory=TRYON_DIR), name="tryon")
+
+# In-memory single-GPU job state store
+jobs_db: dict[str, dict] = {}
+job_queues: dict[str, asyncio.Queue] = {}
+
+class TryonJobRequest(BaseModel):
+    closet_item_id: str
+    category: Optional[str] = "upper"  # upper, lower, dress
+
+async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: bytes, category: str):
+    queue = job_queues.get(job_id)
+    try:
+        jobs_db[job_id]["status"] = "processing"
+        if queue:
+            await queue.put({"percent": 5, "message": "Initializing single-GPU pipeline...", "status": "processing"})
+
+        person_img = Image.open(io.BytesIO(person_bytes)).convert("RGB")
+        garment_img = Image.open(io.BytesIO(garment_bytes))
+
+        async def on_progress(percent: int, message: str):
+            jobs_db[job_id]["progress"] = percent
+            jobs_db[job_id]["message"] = message
+            if queue:
+                await queue.put({"percent": percent, "message": message, "status": "processing"})
+
+        result_img = await model_manager.run_tryon(
+            person_image=person_img,
+            garment_image=garment_img,
+            category=category,
+            steps=30,
+            progress_callback=on_progress
+        )
+
+        # Save result to disk
+        out_filename = f"{job_id}_result.png"
+        out_path = os.path.join(TRYON_DIR, out_filename)
+        result_img.save(out_path, format="PNG")
+
+        result_url = f"/storage/tryon/{out_filename}"
+        jobs_db[job_id]["status"] = "completed"
+        jobs_db[job_id]["progress"] = 100
+        jobs_db[job_id]["message"] = "Try-on completed successfully!"
+        jobs_db[job_id]["result_url"] = result_url
+
+        if queue:
+            await queue.put({
+                "percent": 100,
+                "message": "Try-on completed successfully!",
+                "status": "completed",
+                "result_url": result_url
+            })
+
+    except asyncio.CancelledError:
+        jobs_db[job_id]["status"] = "cancelled"
+        jobs_db[job_id]["message"] = "Job cancelled by user"
+        if queue:
+            await queue.put({"status": "cancelled", "message": "Job cancelled"})
+    except Exception as e:
+        jobs_db[job_id]["status"] = "failed"
+        jobs_db[job_id]["message"] = str(e)
+        if queue:
+            await queue.put({"status": "failed", "message": str(e)})
+
+@app.post("/api/tryon/photo")
+async def create_photo_tryon_job(
+    person_photo: UploadFile = File(...),
+    closet_item_id: str = Form(...),
+    category: str = Form("upper")
+):
+    """
+    Submits a photo try-on job to the single-GPU job queue.
+    """
+    # Fetch garment item from DB
+    item = get_item(closet_item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Closet item '{closet_item_id}' not found.")
+
+    garment_path = os.path.join(UPLOADS_DIR, item["image_filename"])
+    if not os.path.exists(garment_path):
+        raise HTTPException(status_code=404, detail="Garment image file missing.")
+
+    person_bytes = await person_photo.read()
+    with open(garment_path, "rb") as f:
+        garment_bytes = f.read()
+
+    job_id = str(uuid.uuid4())
+    jobs_db[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "message": "Job queued for single-GPU inference",
+        "category": category,
+        "closet_item_id": closet_item_id,
+        "result_url": None
+    }
+    job_queues[job_id] = asyncio.Queue()
+
+    # Launch background task
+    asyncio.create_task(process_tryon_job(job_id, person_bytes, garment_bytes, category))
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Job submitted to GPU queue"
+    }
+
+@app.get("/api/jobs/{job_id}")
+def get_job_status(job_id: str):
+    """Query state of a try-on job."""
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs_db[job_id]
+
+@app.get("/api/jobs/{job_id}/stream")
+async def stream_job_progress(job_id: str):
+    """Server-Sent Events (SSE) stream for live progress updates."""
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    queue = job_queues.get(job_id)
+
+    async def event_generator():
+        # First send current state
+        yield {
+            "data": json.dumps({
+                "percent": jobs_db[job_id]["progress"],
+                "message": jobs_db[job_id]["message"],
+                "status": jobs_db[job_id]["status"],
+                "result_url": jobs_db[job_id].get("result_url")
+            })
+        }
+
+        while True:
+            if jobs_db[job_id]["status"] in ("completed", "failed", "cancelled"):
+                break
+            try:
+                update = await asyncio.wait_for(queue.get(), timeout=15.0)
+                yield {"data": json.dumps(update)}
+                if update.get("status") in ("completed", "failed", "cancelled"):
+                    break
+            except asyncio.TimeoutError:
+                # Keepalive ping
+                yield {"comment": "ping"}
+
+    return EventSourceResponse(event_generator())
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Cancel an active try-on job."""
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+    jobs_db[job_id]["status"] = "cancelled"
+    jobs_db[job_id]["message"] = "Job cancelled by user request"
+    return {"status": "cancelled", "job_id": job_id}
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
