@@ -132,6 +132,20 @@ export default function StudioPage() {
   const [screenshotFlash, setScreenshotFlash] = useState(false);
   const [screenshotSuccess, setScreenshotSuccess] = useState<string | null>(null);
 
+  // Milestone 7: Near-Real-Time Live AI Streaming State
+  const [liveAiActive, setLiveAiActive] = useState(false);
+  const [liveAiImage, setLiveAiImage] = useState<string | null>(null);
+  const [liveAiLatencyMs, setLiveAiLatencyMs] = useState(0);
+  const [liveAiFps, setLiveAiFps] = useState(2.5);
+  const [liveAiFallbackReason, setLiveAiFallbackReason] = useState<string | null>(null);
+  const [isEnhancing, setIsEnhancing] = useState(false);
+  const [enhancedResultUrl, setEnhancedResultUrl] = useState<string | null>(null);
+
+  const liveAiWsRef = useRef<WebSocket | null>(null);
+  const liveAiTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const liveAiLastSendRef = useRef<number>(0);
+  const liveAiInFlightRef = useRef<boolean>(false);
+
   // One-Euro Filters for Jitter-Free Fitting
   const leftEarFilterRef = useRef(new OneEuroTransform(0.6, 0.02));
   const rightEarFilterRef = useRef(new OneEuroTransform(0.6, 0.02));
@@ -202,6 +216,125 @@ export default function StudioPage() {
       }
     });
   }, []);
+
+  // Milestone 7: WebSocket Live AI Connection & Adaptive Frame Loop
+  useEffect(() => {
+    if (!liveAiActive) {
+      if (liveAiWsRef.current) {
+        liveAiWsRef.current.close();
+        liveAiWsRef.current = null;
+      }
+      if (liveAiTimerRef.current) {
+        clearInterval(liveAiTimerRef.current);
+        liveAiTimerRef.current = null;
+      }
+      liveAiInFlightRef.current = false;
+      return;
+    }
+
+    const wsUrl = typeof window !== "undefined"
+      ? `ws://${window.location.hostname}:8000/api/tryon/live`
+      : "ws://localhost:8000/api/tryon/live";
+
+    const ws = new WebSocket(wsUrl);
+    liveAiWsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("[Live AI] Connected to /api/tryon/live WebSocket");
+      setLiveAiFallbackReason(null);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        liveAiInFlightRef.current = false;
+
+        if (data.error === "VRAM_LOW") {
+          setLiveAiActive(false);
+          setLiveAiFallbackReason("GPU VRAM exceeded safety threshold (<1.0 GB headroom). Auto-fallback to Tier-A overlay.");
+          return;
+        }
+
+        if (data.status === "success" && data.image_jpeg) {
+          setLiveAiImage(data.image_jpeg);
+          if (data.timing && data.timing.client_timestamp) {
+            const rtt = Math.round(performance.now() - data.timing.client_timestamp);
+            setLiveAiLatencyMs(rtt);
+
+            // Auto-fallback: if latency is above 6000ms (6s), disable Live AI and notify user
+            if (rtt > 6000) {
+              setLiveAiActive(false);
+              setLiveAiFallbackReason(`Measured inference latency (${(rtt / 1000).toFixed(1)}s) exceeded 6.0s limit. Auto-fallback to fast Tier-A overlay.`);
+              return;
+            }
+
+            // Adaptive frame rate: faster latency -> 3.5 to 4 fps; slower latency -> 1.5 to 2 fps
+            if (rtt < 800) {
+              setLiveAiFps(3.5);
+            } else if (rtt < 1500) {
+              setLiveAiFps(2.5);
+            } else {
+              setLiveAiFps(1.5);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[Live AI] Message parse error:", err);
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.warn("[Live AI] WebSocket error:", e);
+      setLiveAiActive(false);
+      setLiveAiFallbackReason("WebSocket connection failed. Falling back to Tier-A on-device overlay.");
+    };
+
+    ws.onclose = () => {
+      console.log("[Live AI] WebSocket closed");
+    };
+
+    // Frame capture helper (downscaled 384px JPEG for fast upload)
+    const sendNextFrame = () => {
+      if (!videoRef.current || !liveAiActive || ws.readyState !== WebSocket.OPEN) return;
+      if (liveAiInFlightRef.current) return; // Latest-frame backpressure: drop if still in flight
+
+      const video = videoRef.current;
+      if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+      const offCanvas = document.createElement("canvas");
+      const targetWidth = 384;
+      const targetHeight = Math.round((video.videoHeight / video.videoWidth) * targetWidth);
+      offCanvas.width = targetWidth;
+      offCanvas.height = targetHeight;
+      const ctx = offCanvas.getContext("2d");
+      if (!ctx) return;
+
+      // Draw camera video frame
+      ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+      const jpegData = offCanvas.toDataURL("image/jpeg", 0.75);
+
+      const activeItem = selectedItems[activeCategory];
+      const payload = {
+        frame_jpeg: jpegData,
+        timestamp: performance.now(),
+        closet_item_id: activeItem?.id || null,
+        category: activeCategory === "hair" ? "hair" : (activeCategory === "upper" || activeCategory === "dress") ? activeCategory : "upper"
+      };
+
+      liveAiInFlightRef.current = true;
+      ws.send(JSON.stringify(payload));
+    };
+
+    // Start adaptive sending timer
+    const intervalMs = Math.round(1000 / liveAiFps);
+    liveAiTimerRef.current = setInterval(sendNextFrame, intervalMs);
+
+    return () => {
+      if (liveAiTimerRef.current) clearInterval(liveAiTimerRef.current);
+      if (ws) ws.close();
+      liveAiInFlightRef.current = false;
+    };
+  }, [liveAiActive, liveAiFps, activeCategory, selectedItems]);
 
   // Secure context detection
   useEffect(() => {
@@ -1110,18 +1243,39 @@ export default function StudioPage() {
         </div>
       )}
 
-      {/* Milestone 5: Quick Preview Real-Time Notice */}
+      {/* Milestone 7: Near-Real-Time Live AI Status & Auto-Fallback Banner */}
+      {liveAiFallbackReason && (
+        <div className="bg-rose-500/10 border-b border-rose-500/30 px-4 py-2 text-rose-300 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+            <span>
+              <strong>Live AI Auto-Fallback:</strong> {liveAiFallbackReason}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Milestone 5 & 7: Preview / Live AI Latency Notice */}
       <div className="bg-gradient-to-r from-cyan-950/40 via-purple-950/40 to-neutral-900 border-b border-cyan-500/20 px-4 py-2 text-xs flex items-center justify-between">
         <div className="flex items-center gap-2 max-w-7xl mx-auto w-full">
-          <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-semibold text-[10px] uppercase tracking-wider border border-cyan-500/30">
-            Quick Live Preview
+          <span className={`px-2 py-0.5 rounded-full font-semibold text-[10px] uppercase tracking-wider border ${
+            liveAiActive
+              ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 animate-pulse"
+              : "bg-neutral-800 text-neutral-300 border-neutral-700"
+          }`}>
+            {liveAiActive ? "Near Real-Time Live AI" : "Tier-A Live Preview"}
           </span>
           <span className="text-neutral-300">
-            On-device real-time neural tracking & garment warp. For high-fidelity diffusion fitting, use{" "}
-            <Link href="/tryon" className="text-cyan-400 hover:underline font-medium">
-              Photo Try-On
-            </Link>{" "}
-            or tap Capture & Enhance below.
+            {liveAiActive ? (
+              <>
+                Streaming adaptive frames (~{liveAiFps.toFixed(1)} fps) to single-GPU CatVTON pipeline. Latency:{" "}
+                <strong className="text-cyan-300 font-mono">{liveAiLatencyMs}ms</strong>. Tier-A overlay stays smoothly active between updates.
+              </>
+            ) : (
+              <>
+                On-device real-time neural tracking &amp; garment warp. Toggle <strong className="text-cyan-400">Live AI</strong> below for near-real-time CatVTON, or tap <strong className="text-purple-300">Capture &amp; Enhance</strong> for high-res photo fitting.
+              </>
+            )}
           </span>
         </div>
       </div>
@@ -1146,7 +1300,21 @@ export default function StudioPage() {
               }}
             />
 
-            {/* Landmarks Overlay Canvas */}
+            {/* Milestone 7: Live AI Crossfade Image Layer (Near-Real-Time CatVTON Result) */}
+            {liveAiActive && liveAiImage && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={liveAiImage}
+                alt="Live AI Try-On Feed"
+                className="absolute inset-0 w-full h-full object-cover transition-opacity duration-500 pointer-events-none"
+                style={{
+                  transform: isMirrored ? "scaleX(-1)" : "none",
+                  opacity: 0.88
+                }}
+              />
+            )}
+
+            {/* Landmarks & Garment Overlay Canvas (Tier-A remains active over Live AI) */}
             <canvas
               ref={canvasRef}
               className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-transform duration-300"
@@ -1299,19 +1467,84 @@ export default function StudioPage() {
                 <Camera className="w-4 h-4" />
               </button>
 
-              {/* Milestone 5: Capture & Enhance Placeholder Button */}
+              {/* Milestone 7: Live AI Near-Real-Time Toggle Button */}
+              <button
+                id="btn-toggle-live-ai"
+                onClick={() => {
+                  setLiveAiFallbackReason(null);
+                  setLiveAiActive(!liveAiActive);
+                }}
+                title="Toggle Near-Real-Time Live AI CatVTON Stream"
+                className={`px-3 py-2 rounded-2xl border backdrop-blur-md shadow-xl flex items-center gap-2 text-xs font-semibold transition-all active:scale-95 ${
+                  liveAiActive
+                    ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-neutral-950 border-cyan-300 shadow-cyan-500/30"
+                    : "bg-neutral-900/85 border-white/15 text-neutral-300 hover:text-white"
+                }`}
+              >
+                <Sparkles className={`w-4 h-4 ${liveAiActive ? "animate-spin" : "text-cyan-400"}`} />
+                <span>{liveAiActive ? "Live AI Active" : "Live AI"}</span>
+                {liveAiActive && (
+                  <span className="text-[10px] bg-black/40 text-cyan-200 px-1.5 py-0.5 rounded-full font-mono">
+                    {liveAiLatencyMs > 0 ? `${(liveAiLatencyMs / 1000).toFixed(1)}s` : "syncing"}
+                  </span>
+                )}
+              </button>
+
+              {/* Milestone 7: Wired Capture & Enhance Action Button */}
               <button
                 id="btn-capture-enhance"
-                onClick={() => {
-                  alert(
-                    "Capture & Enhance placeholder: In the full pipeline, this snapshots your current pose frame and sends it to the CatVTON / HairFastGAN high-resolution neural diffusion server for photorealistic rendering!"
-                  );
+                disabled={isEnhancing}
+                onClick={async () => {
+                  if (!videoRef.current) return;
+                  const video = videoRef.current;
+                  if (video.videoWidth === 0) return;
+
+                  setIsEnhancing(true);
+                  try {
+                    // 1. Snapshot native full-resolution video frame
+                    const capCanvas = document.createElement("canvas");
+                    capCanvas.width = video.videoWidth;
+                    capCanvas.height = video.videoHeight;
+                    const cctx = capCanvas.getContext("2d");
+                    if (!cctx) throw new Error("Canvas context failed");
+                    cctx.drawImage(video, 0, 0);
+
+                    const blob = await new Promise<Blob | null>((resolve) =>
+                      capCanvas.toBlob(resolve, "image/png", 0.95)
+                    );
+                    if (!blob) throw new Error("Snapshot blob creation failed");
+
+                    // 2. Submit to full-resolution pipeline
+                    const activeGarment = selectedItems[activeCategory];
+                    const formData = new FormData();
+                    formData.append("person_photo", blob, "studio_capture.png");
+                    if (activeGarment) {
+                      formData.append("closet_item_id", activeGarment.id);
+                    }
+                    formData.append("category", activeCategory === "hair" ? "hair" : (activeCategory === "upper" || activeCategory === "dress") ? activeCategory : "upper");
+
+                    const res = await fetch(`${apiBase}/api/tryon/photo`, {
+                      method: "POST",
+                      body: formData
+                    });
+
+                    if (res.ok) {
+                      const data = await res.json();
+                      alert(`Full-resolution Capture & Enhance job started! (Job ID: ${data.job_id})\nView high-res diffusion rendering on the /tryon studio page.`);
+                    } else {
+                      alert("Capture & Enhance submission failed. Please try again.");
+                    }
+                  } catch (e: any) {
+                    alert(`Capture & Enhance error: ${e.message}`);
+                  } finally {
+                    setIsEnhancing(false);
+                  }
                 }}
-                title="Capture & Enhance with High-Res Diffusion (CatVTON)"
-                className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-xl shadow-purple-500/25 flex items-center gap-2 text-xs font-semibold transition-all active:scale-95"
+                title="Capture & Enhance current frame with full-resolution CatVTON diffusion"
+                className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-xl shadow-purple-500/25 flex items-center gap-2 text-xs font-semibold transition-all active:scale-95 disabled:opacity-50"
               >
-                <Wand2 className="w-4 h-4 animate-pulse text-amber-300" />
-                <span>Capture &amp; Enhance</span>
+                <Wand2 className={`w-4 h-4 text-amber-300 ${isEnhancing ? "animate-spin" : ""}`} />
+                <span>{isEnhancing ? "Enhancing..." : "Capture & Enhance"}</span>
               </button>
             </div>
           </div>

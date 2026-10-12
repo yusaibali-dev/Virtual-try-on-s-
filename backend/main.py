@@ -1,11 +1,12 @@
 import os
 import uuid
 from typing import Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
+import base64
 
 from security import validate_url_ssrf, fetch_image_from_url, fetch_product_page_og
 from pipeline import detect_category, remove_background, create_thumbnail, VALID_CATEGORIES
@@ -582,6 +583,121 @@ async def create_hairstyle_job(
         "backend": chosen_backend,
         "message": f"Hairstyle job queued on single-GPU manager ({chosen_backend})"
     }
+
+# -------------------------------------------------------------
+# Milestone 7: Near-Real-Time AI Quality (WebSocket /api/tryon/live)
+# -------------------------------------------------------------
+@app.websocket("/api/tryon/live")
+async def websocket_live_tryon(websocket: WebSocket):
+    """
+    WebSocket endpoint for near-real-time live CatVTON camera stream.
+    Features:
+    - Latest-frame-wins backpressure (drops stale queued frames, never backlogs)
+    - Reduced resolution & steps
+    - Timing metadata & VRAM guard check
+    """
+    await websocket.accept()
+    print("[WebSocket] Live AI client connected.")
+
+    # State for latest frame dropped-frame control
+    latest_frame_data = {"frame_bytes": None, "timestamp": 0, "closet_item_id": None, "category": "upper"}
+    has_new_frame = asyncio.Event()
+    is_active = True
+
+    async def frame_receiver():
+        nonlocal is_active
+        try:
+            while is_active:
+                msg_text = await websocket.receive_text()
+                msg = json.loads(msg_text)
+                img_b64 = msg.get("frame_jpeg")
+                if img_b64:
+                    if "," in img_b64:
+                        img_b64 = img_b64.split(",", 1)[1]
+                    frame_bytes = base64.b64decode(img_b64)
+                    latest_frame_data["frame_bytes"] = frame_bytes
+                    latest_frame_data["timestamp"] = msg.get("timestamp", 0)
+                    latest_frame_data["closet_item_id"] = msg.get("closet_item_id")
+                    latest_frame_data["category"] = msg.get("category", "upper")
+                    # Signal that a fresh frame has arrived (overwriting any previous unread frame)
+                    has_new_frame.set()
+        except WebSocketDisconnect:
+            is_active = False
+        except Exception as e:
+            print(f"[WebSocket] Receiver error: {e}")
+            is_active = False
+
+    receiver_task = asyncio.create_task(frame_receiver())
+
+    try:
+        while is_active:
+            # Wait for latest frame
+            await has_new_frame.wait()
+            has_new_frame.clear()
+
+            frame_bytes = latest_frame_data["frame_bytes"]
+            client_ts = latest_frame_data["timestamp"]
+            item_id = latest_frame_data["closet_item_id"]
+            category = latest_frame_data["category"]
+
+            if not frame_bytes:
+                continue
+
+            # VRAM Guard Check
+            vram = model_manager.get_vram_usage()
+            if vram.get("allocated_gb", 0.0) > (model_manager.max_vram_gb - 1.0):
+                await websocket.send_text(json.dumps({
+                    "error": "VRAM_LOW",
+                    "message": "GPU VRAM headroom critical. Live AI paused.",
+                    "status": "fallback"
+                }))
+                await asyncio.sleep(1.0)
+                continue
+
+            # Load garment
+            garment_img = None
+            if item_id:
+                item = get_item(item_id)
+                if item:
+                    item_path = os.path.join(UPLOADS_DIR, item["image_filename"])
+                    if os.path.exists(item_path):
+                        garment_img = Image.open(item_path)
+
+            if garment_img is None:
+                # Default cyan sports tee
+                garment_img = Image.new("RGBA", (300, 300), (6, 182, 212, 240))
+
+            person_img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+
+            # Execute fast live CatVTON
+            result_img, timing = await model_manager.run_live_tryon(
+                person_image=person_img,
+                garment_image=garment_img,
+                category=category,
+                reduced_steps=4
+            )
+
+            # Encode result to JPEG
+            buf = io.BytesIO()
+            result_img.save(buf, format="JPEG", quality=80)
+            res_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
+            timing["client_timestamp"] = client_ts
+            timing["server_timestamp"] = time.time()
+
+            await websocket.send_text(json.dumps({
+                "status": "success",
+                "image_jpeg": f"data:image/jpeg;base64,{res_b64}",
+                "timing": timing
+            }))
+
+    except WebSocketDisconnect:
+        print("[WebSocket] Client disconnected.")
+    except Exception as e:
+        print(f"[WebSocket] Inference loop error: {e}")
+    finally:
+        is_active = False
+        receiver_task.cancel()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

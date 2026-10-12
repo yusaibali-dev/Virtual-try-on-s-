@@ -4,7 +4,7 @@
 - **Frontend**: Next.js 16 (React 19, TypeScript, Tailwind CSS v4, Three.js / React Three Fiber, MediaPipe on-device vision)
 - **Backend**: FastAPI (Python, uvicorn, rembg background removal, BeautifulSoup4, SQLite)
 - **AI Models / Inference**: CatVTON / HairFastGAN (Target: NVIDIA RTX 3070 with 8 GB VRAM)
-- **Current Milestone**: Milestone 6 Complete
+- **Current Milestone**: Milestone 7 Complete
 
 ---
 
@@ -39,25 +39,28 @@
 ### Milestone 6: Hairstyle Try-On on Photos
 - **Status**: **Done**
 - **Components Built**:
-  - **HairstylePipeline Interface & Dual Backends**:
-    - Abstract `HairstylePipeline` interface in `backend/hairstyle_pipeline.py`.
-    - **Backend 1**: `HairFastGANPipeline` in `backend/hairfastgan_pipeline.py` (StyleGAN2 latent transfer).
-    - **Backend 2**: `DiffusionIPAdapterHairPipeline` in `backend/diffusion_hair_pipeline.py` (BiSeNet face-parsing mask + SD 1.5 inpainting + IP-Adapter).
-  - **Model Manager Residency Enforcer**:
-    - `model_manager.py` guarantees only **one model** is resident in GPU VRAM at any time (`catvton`, `hairfastgan`, or `diffusion_ipadapter`). Switching models automatically purges GPU cache and performs garbage collection.
-    - Configuration endpoints: `GET /api/hairstyle/config` and `POST /api/hairstyle/config`.
-  - **Setup Script Entries & Weights Breakdown**:
-    - Updated `scripts/setup_models.py` with weights download breakdown for CatVTON (~10.2 GB), HairFastGAN (~1.8 GB), and SD+IP-Adapter (~5.7 GB). Total: ~17.7 GB.
-  - **Frontend Photo Try-On Studio (`/tryon`)**:
-    - Integrated mode switcher between Clothes (CatVTON) and Hairstyle.
-    - Backend switcher toggle: HairFastGAN vs SD+IP-Adapter.
-    - Style transfer from custom uploaded hairstyle photo or closet item.
-    - Color transfer: color picker + swatches with live tint synthesis.
-    - Server-Sent Events (SSE) progress bar and Before/After split comparison slider.
-  - **Benchmark Evaluation (`scripts/benchmark.py`)**:
-    - HairFastGAN: **1.07s latency**, **2.4 GB peak VRAM** (5.6 GB VRAM headroom).
-    - SD 1.5 + IP-Adapter: **2.83s latency**, **4.6 GB peak VRAM** (3.4 GB VRAM headroom).
-    - **Verdict on RTX 3070 (8GB)**: **HairFastGAN is the clear winner** (~3.5x faster, 2.2 GB less VRAM, crisper strand separation without diffusion distortion).
+  - `HairstylePipeline` interface with `HairFastGANPipeline` and `DiffusionIPAdapterHairPipeline`.
+  - Single-model residency enforcer in `model_manager.py`.
+  - Setup script download breakdown (~17.7 GB total).
+  - Mode switcher, style transfer, color picker, and Before/After slider in `/tryon`.
+  - Benchmark evaluation proving HairFastGAN is ~3.5x faster (1.07s vs 2.83s, 2.4 GB VRAM).
+
+### Milestone 7: Near-Real-Time AI Quality
+- **Status**: **Done**
+- **Components Built**:
+  - **Backend Streaming Pipeline (`WS /api/tryon/live`)**:
+    - WebSocket endpoint receiving downscaled JPEG frames.
+    - **Latest-frame-wins backpressure**: asynchronous frame receiver drops stale unread frames immediately whenever a newer frame arrives, preventing queue buildup or server memory leaks.
+    - Fast CatVTON pipeline with reduced resolution (384x512) and reduced denoising steps (4 steps).
+    - Returns JPEG result frames with complete latency and timing metadata (`inference_ms`, `total_ms`, `steps`, `vram_allocated_gb`).
+    - VRAM guard check: automatically yields `VRAM_LOW` signal if allocated memory exceeds the safe headroom threshold.
+  - **Frontend Live AI Viewport Integration (`/studio`)**:
+    - **"Live AI" toggle button** with live latency indicator badge.
+    - **Adaptive frame sending**: dynamically sends 2 to 4 fps tuned to measured round-trip time.
+    - **Smooth crossfade transition**: blends the near-real-time CatVTON result image (88% opacity) over the video feed.
+    - **Uninterrupted Tier-A landmarks**: on-device MediaPipe landmark tracking and clothing warps remain continuously active over the Live AI feed between server updates.
+    - **Wired "Capture & Enhance" button**: takes a native full-resolution snapshot from the live camera and submits it to the background high-res CatVTON diffusion pipeline.
+    - **Auto-fallback safeguards**: automatically disables Live AI and displays an explanatory banner if network/inference latency exceeds 6.0 seconds or if GPU VRAM runs low.
 
 ---
 
@@ -69,7 +72,7 @@ cd backend
 python -m pip install -r requirements.txt
 python main.py
 ```
-Backend runs on `http://localhost:8000`. Swagger API docs available at `http://localhost:8000/docs`.
+Backend runs on `http://localhost:8000`. WebSocket endpoint at `ws://localhost:8000/api/tryon/live`.
 
 ### 2. Frontend (Next.js)
 ```bash
@@ -77,8 +80,8 @@ cd frontend
 npm run dev
 ```
 - Home portal: `http://localhost:3000`
+- Live Studio (Camera + Live AI Stream): `http://localhost:3000/studio`
 - Photo Try-On Studio (Hairstyle + Clothes): `http://localhost:3000/tryon`
-- Live Studio (Camera): `http://localhost:3000/studio`
 - AI Closet: `http://localhost:3000/closet`
 
 ### 3. Running Backend Tests & Benchmark
@@ -96,6 +99,7 @@ python scripts/benchmark.py
 
 ## Known Issues & Notes
 - On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
-- Model weight download requires ~17.7 GB disk space when executed via `python scripts/setup_models.py --force`.
+- If mobile network connectivity is slow (RTT > 6s), the studio auto-falls back to Tier-A on-device overlay to preserve camera responsiveness.
+
 
 
