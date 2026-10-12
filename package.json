@@ -1,0 +1,12 @@
+{
+  "name": "vton-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:frontend-https": "cd frontend && npm run dev:https",
+    "dev:frontend-host": "cd frontend && npm run dev:host-https",
+    "dev:backend": "cd backend && python main.py",
+    "tunnel": "cloudflared tunnel --url http://localhost:3000"
+  }
+}
