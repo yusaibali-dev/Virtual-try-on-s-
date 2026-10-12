@@ -335,10 +335,12 @@ async def start_periodic_ttl_cleanup():
     asyncio.create_task(ttl_worker())
 
 # -------------------------------------------------------------
-# Milestone 4: CatVTON Photo Try-On & Job Queue Endpoints
+# Milestone 4 & 9: Scaled-Out Job Queue & CloudGPUProvider
 # -------------------------------------------------------------
 from sse_starlette.sse import EventSourceResponse
 from model_manager import model_manager
+from cloud_gpu_provider import get_cloud_provider
+from job_queue import job_queue_manager
 import json
 import asyncio
 from PIL import Image
@@ -348,31 +350,31 @@ TRYON_DIR = os.path.join(os.path.dirname(__file__), "storage", "tryon")
 os.makedirs(TRYON_DIR, exist_ok=True)
 app.mount("/storage/tryon", StaticFiles(directory=TRYON_DIR), name="tryon")
 
-# In-memory single-GPU job state store
-jobs_db: dict[str, dict] = {}
-job_queues: dict[str, asyncio.Queue] = {}
-
 class TryonJobRequest(BaseModel):
     closet_item_id: str
     category: Optional[str] = "upper"  # upper, lower, dress
 
 async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: bytes, category: str):
-    queue = job_queues.get(job_id)
+    start_time = time.time()
+    provider = get_cloud_provider()
     try:
-        jobs_db[job_id]["status"] = "processing"
-        if queue:
-            await queue.put({"percent": 5, "message": "Initializing single-GPU pipeline...", "status": "processing"})
+        job_queue_manager.update_job(job_id, {
+            "status": "processing",
+            "progress": 5,
+            "message": f"Initializing inference on {provider.name} provider..."
+        })
 
         person_img = Image.open(io.BytesIO(person_bytes)).convert("RGB")
         garment_img = Image.open(io.BytesIO(garment_bytes))
 
         async def on_progress(percent: int, message: str):
-            jobs_db[job_id]["progress"] = percent
-            jobs_db[job_id]["message"] = message
-            if queue:
-                await queue.put({"percent": percent, "message": message, "status": "processing"})
+            job_queue_manager.update_job(job_id, {
+                "progress": percent,
+                "message": message,
+                "status": "processing"
+            })
 
-        result_img = await model_manager.run_tryon(
+        result_img = await provider.run_tryon(
             person_image=person_img,
             garment_image=garment_img,
             category=category,
@@ -386,29 +388,34 @@ async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: byt
         result_img.save(out_path, format="PNG")
 
         result_url = f"/storage/tryon/{out_filename}"
-        jobs_db[job_id]["status"] = "completed"
-        jobs_db[job_id]["progress"] = 100
-        jobs_db[job_id]["message"] = "Try-on completed successfully!"
-        jobs_db[job_id]["result_url"] = result_url
+        duration = time.time() - start_time
+        telemetry = provider.log_telemetry(job_id, "tryon", duration, "completed")
 
-        if queue:
-            await queue.put({
-                "percent": 100,
-                "message": "Try-on completed successfully!",
-                "status": "completed",
-                "result_url": result_url
-            })
+        job_queue_manager.update_job(job_id, {
+            "status": "completed",
+            "progress": 100,
+            "message": "Try-on completed successfully!",
+            "result_url": result_url,
+            "latency_s": telemetry["latency_s"],
+            "cost_usd": telemetry["cost_usd"],
+            "provider": provider.name
+        })
 
     except asyncio.CancelledError:
-        jobs_db[job_id]["status"] = "cancelled"
-        jobs_db[job_id]["message"] = "Job cancelled by user"
-        if queue:
-            await queue.put({"status": "cancelled", "message": "Job cancelled"})
+        duration = time.time() - start_time
+        provider.log_telemetry(job_id, "tryon", duration, "cancelled")
+        job_queue_manager.update_job(job_id, {
+            "status": "cancelled",
+            "message": "Job cancelled by user"
+        })
     except Exception as e:
-        jobs_db[job_id]["status"] = "failed"
-        jobs_db[job_id]["message"] = str(e)
-        if queue:
-            await queue.put({"status": "failed", "message": str(e)})
+        duration = time.time() - start_time
+        provider.log_telemetry(job_id, "tryon", duration, "failed")
+        job_queue_manager.update_job(job_id, {
+            "status": "failed",
+            "message": str(e),
+            "latency_s": round(duration, 3)
+        })
 
 @app.post("/api/tryon/photo")
 async def create_photo_tryon_job(
@@ -417,7 +424,7 @@ async def create_photo_tryon_job(
     category: str = Form("upper")
 ):
     """
-    Submits a photo try-on job to the single-GPU job queue.
+    Submits a photo try-on job to the scaled-out Redis+RQ or async job queue.
     """
     # Fetch garment item from DB
     item = get_item(closet_item_id)
@@ -433,74 +440,70 @@ async def create_photo_tryon_job(
         garment_bytes = f.read()
 
     job_id = str(uuid.uuid4())
-    jobs_db[job_id] = {
-        "id": job_id,
-        "status": "queued",
-        "progress": 0,
-        "message": "Job queued for single-GPU inference",
-        "category": category,
-        "closet_item_id": closet_item_id,
-        "result_url": None
-    }
-    job_queues[job_id] = asyncio.Queue()
+    job_record = job_queue_manager.register_job(
+        job_id=job_id,
+        job_type="tryon",
+        category=category,
+        details={"closet_item_id": closet_item_id}
+    )
 
-    # Launch background task
-    asyncio.create_task(process_tryon_job(job_id, person_bytes, garment_bytes, category))
+    # If Redis + RQ is running, dispatch to RQ distributed worker
+    if job_queue_manager.is_redis_available and job_queue_manager.rq_queue:
+        job_queue_manager.rq_queue.enqueue(
+            "worker.execute_tryon_task",
+            job_id,
+            person_bytes,
+            garment_bytes,
+            category,
+            30
+        )
+    else:
+        # Launch async task
+        asyncio.create_task(process_tryon_job(job_id, person_bytes, garment_bytes, category))
 
     return {
         "job_id": job_id,
         "status": "queued",
-        "message": "Job submitted to GPU queue"
+        "provider": job_record.get("provider", "local"),
+        "message": f"Job submitted to {job_record.get('provider', 'local')} GPU queue"
     }
 
 @app.get("/api/jobs/{job_id}")
 def get_job_status(job_id: str):
     """Query state of a try-on job."""
-    if job_id not in jobs_db:
+    job = job_queue_manager.get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return jobs_db[job_id]
+    return job
 
 @app.get("/api/jobs/{job_id}/stream")
 async def stream_job_progress(job_id: str):
     """Server-Sent Events (SSE) stream for live progress updates."""
-    if job_id not in jobs_db:
+    job = job_queue_manager.get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    queue = job_queues.get(job_id)
-
-    async def event_generator():
-        # First send current state
-        yield {
-            "data": json.dumps({
-                "percent": jobs_db[job_id]["progress"],
-                "message": jobs_db[job_id]["message"],
-                "status": jobs_db[job_id]["status"],
-                "result_url": jobs_db[job_id].get("result_url")
-            })
-        }
-
-        while True:
-            if jobs_db[job_id]["status"] in ("completed", "failed", "cancelled"):
-                break
-            try:
-                update = await asyncio.wait_for(queue.get(), timeout=15.0)
-                yield {"data": json.dumps(update)}
-                if update.get("status") in ("completed", "failed", "cancelled"):
-                    break
-            except asyncio.TimeoutError:
-                # Keepalive ping
-                yield {"comment": "ping"}
-
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(job_queue_manager.stream_job_events(job_id))
 
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
     """Cancel an active try-on job."""
-    if job_id not in jobs_db:
+    success = job_queue_manager.cancel_job(job_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Job not found")
-    jobs_db[job_id]["status"] = "cancelled"
-    jobs_db[job_id]["message"] = "Job cancelled by user request"
     return {"status": "cancelled", "job_id": job_id}
+
+@app.get("/api/cloud/config")
+def get_cloud_config():
+    """Returns information about active cloud GPU inference provider and queue mode."""
+    provider = get_cloud_provider()
+    return {
+        "provider": provider.name,
+        "hourly_cost_usd": provider.hourly_cost_usd,
+        "queue_backend": "redis_rq" if job_queue_manager.is_redis_available else "in_process",
+        "redis_connected": job_queue_manager.is_redis_available,
+        "redis_url": job_queue_manager.redis_url
+    }
 
 # -------------------------------------------------------------
 # Milestone 6: Hairstyle Try-On & Pipeline Backend Switching
@@ -553,26 +556,26 @@ async def process_hairstyle_job(
     color_hex: Optional[str],
     backend: Optional[str]
 ):
-    queue = job_queues.get(job_id)
+    start_time = time.time()
+    provider = get_cloud_provider()
     try:
-        jobs_db[job_id]["status"] = "processing"
-        if queue:
-            await queue.put({
-                "percent": 5,
-                "message": f"Initializing hairstyle pipeline ({backend or model_manager.hairstyle_backend})...",
-                "status": "processing"
-            })
+        job_queue_manager.update_job(job_id, {
+            "status": "processing",
+            "progress": 5,
+            "message": f"Initializing hairstyle pipeline on {provider.name} ({backend or model_manager.hairstyle_backend})..."
+        })
 
         person_img = Image.open(io.BytesIO(person_bytes)).convert("RGB")
         reference_img = Image.open(io.BytesIO(reference_bytes)).convert("RGBA") if reference_bytes else None
 
         async def on_progress(percent: int, message: str):
-            jobs_db[job_id]["progress"] = percent
-            jobs_db[job_id]["message"] = message
-            if queue:
-                await queue.put({"percent": percent, "message": message, "status": "processing"})
+            job_queue_manager.update_job(job_id, {
+                "progress": percent,
+                "message": message,
+                "status": "processing"
+            })
 
-        result_img = await model_manager.run_hairstyle(
+        result_img = await provider.run_hairstyle(
             person_image=person_img,
             reference_style_image=reference_img,
             color_hex=color_hex,
@@ -585,29 +588,34 @@ async def process_hairstyle_job(
         result_img.save(out_path, format="PNG")
 
         result_url = f"/storage/tryon/{out_filename}"
-        jobs_db[job_id]["status"] = "completed"
-        jobs_db[job_id]["progress"] = 100
-        jobs_db[job_id]["message"] = "Hairstyle synthesis completed successfully!"
-        jobs_db[job_id]["result_url"] = result_url
+        duration = time.time() - start_time
+        telemetry = provider.log_telemetry(job_id, "hairstyle", duration, "completed")
 
-        if queue:
-            await queue.put({
-                "percent": 100,
-                "message": "Hairstyle synthesis completed successfully!",
-                "status": "completed",
-                "result_url": result_url
-            })
+        job_queue_manager.update_job(job_id, {
+            "status": "completed",
+            "progress": 100,
+            "message": "Hairstyle synthesis completed successfully!",
+            "result_url": result_url,
+            "latency_s": telemetry["latency_s"],
+            "cost_usd": telemetry["cost_usd"],
+            "provider": provider.name
+        })
 
     except asyncio.CancelledError:
-        jobs_db[job_id]["status"] = "cancelled"
-        jobs_db[job_id]["message"] = "Job cancelled by user"
-        if queue:
-            await queue.put({"status": "cancelled", "message": "Job cancelled"})
+        duration = time.time() - start_time
+        provider.log_telemetry(job_id, "hairstyle", duration, "cancelled")
+        job_queue_manager.update_job(job_id, {
+            "status": "cancelled",
+            "message": "Job cancelled by user"
+        })
     except Exception as e:
-        jobs_db[job_id]["status"] = "failed"
-        jobs_db[job_id]["message"] = str(e)
-        if queue:
-            await queue.put({"status": "failed", "message": str(e)})
+        duration = time.time() - start_time
+        provider.log_telemetry(job_id, "hairstyle", duration, "failed")
+        job_queue_manager.update_job(job_id, {
+            "status": "failed",
+            "message": str(e),
+            "latency_s": round(duration, 3)
+        })
 
 @app.post("/api/tryon/hairstyle")
 async def create_hairstyle_job(
@@ -618,7 +626,7 @@ async def create_hairstyle_job(
     backend: Optional[str] = Form(None)
 ):
     """
-    Submits a hairstyle try-on job to the single-GPU job queue.
+    Submits a hairstyle try-on job to the scaled-out job queue.
     Accepts:
     - person_photo: Target user image
     - reference_photo or closet_item_id: Hairstyle reference
@@ -641,34 +649,43 @@ async def create_hairstyle_job(
     job_id = str(uuid.uuid4())
     chosen_backend = backend or model_manager.hairstyle_backend
 
-    jobs_db[job_id] = {
-        "id": job_id,
-        "status": "queued",
-        "progress": 0,
-        "message": f"Hairstyle job queued ({chosen_backend})",
-        "category": "hair",
-        "backend": chosen_backend,
-        "color_hex": color_hex,
-        "result_url": None
-    }
-    job_queues[job_id] = asyncio.Queue()
-
-    # Launch background task
-    asyncio.create_task(
-        process_hairstyle_job(
-            job_id=job_id,
-            person_bytes=person_bytes,
-            reference_bytes=reference_bytes,
-            color_hex=color_hex,
-            backend=chosen_backend
-        )
+    job_record = job_queue_manager.register_job(
+        job_id=job_id,
+        job_type="hairstyle",
+        category="hair",
+        details={
+            "backend": chosen_backend,
+            "color_hex": color_hex
+        }
     )
+
+    if job_queue_manager.is_redis_available and job_queue_manager.rq_queue:
+        job_queue_manager.rq_queue.enqueue(
+            "worker.execute_hairstyle_task",
+            job_id,
+            person_bytes,
+            reference_bytes,
+            color_hex,
+            chosen_backend
+        )
+    else:
+        # Launch background task
+        asyncio.create_task(
+            process_hairstyle_job(
+                job_id=job_id,
+                person_bytes=person_bytes,
+                reference_bytes=reference_bytes,
+                color_hex=color_hex,
+                backend=chosen_backend
+            )
+        )
 
     return {
         "job_id": job_id,
         "status": "queued",
         "backend": chosen_backend,
-        "message": f"Hairstyle job queued on single-GPU manager ({chosen_backend})"
+        "provider": job_record.get("provider", "local"),
+        "message": f"Hairstyle job queued ({chosen_backend}) on {job_record.get('provider', 'local')}"
     }
 
 # -------------------------------------------------------------

@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: vton-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vton-backend-api
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - INFERENCE_PROVIDER=${INFERENCE_PROVIDER:-local}
+      - MODAL_API_KEY=${MODAL_API_KEY:-}
+      - MODAL_TRYON_ENDPOINT=${MODAL_TRYON_ENDPOINT:-}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY:-}
+      - RUNPOD_ENDPOINT_ID=${RUNPOD_ENDPOINT_ID:-}
+      - HAIRSTYLE_BACKEND=${HAIRSTYLE_BACKEND:-hairfastgan}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./backend/storage:/app/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  rq-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vton-rq-worker
+    command: python worker.py
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - INFERENCE_PROVIDER=${INFERENCE_PROVIDER:-local}
+      - MODAL_API_KEY=${MODAL_API_KEY:-}
+      - MODAL_TRYON_ENDPOINT=${MODAL_TRYON_ENDPOINT:-}
+      - RUNPOD_API_KEY=${RUNPOD_API_KEY:-}
+      - RUNPOD_ENDPOINT_ID=${RUNPOD_ENDPOINT_ID:-}
+      - HAIRSTYLE_BACKEND=${HAIRSTYLE_BACKEND:-hairfastgan}
+    volumes:
+      - ./backend/storage:/app/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local

@@ -65,17 +65,43 @@
   - **UI Polish**: Dark/light mode theme toggle, pulsing loading skeleton cards, studio onboarding tips modal (framing, lighting), and PWA manifest (`manifest.json` + `icon.svg`).
   - **Comprehensive README**: Architecture diagram, setup, mobile HTTPS run steps, privacy breakdown, and troubleshooting matrix.
 
+### Milestone 9: Scale-Out (Distributed Queue & Cloud GPU)
+- **Status**: **Done**
+- **Components Built**:
+  - **`CloudGPUProvider` Adapter**: Unified inference adapter interface switchable by `.env` (`INFERENCE_PROVIDER=local|modal|runpod`).
+    - `ModalGPUProvider`: Modal serverless A10G GPU integration (~$1.10/hr) with fallback simulation and remote webhook support.
+    - `RunPodGPUProvider`: RunPod serverless RTX 4090 GPU integration (~$0.74/hr) with job polling.
+    - `LocalGPUProvider`: Local on-host GPU execution via `ModelManager` ($0.00/hr).
+  - **Redis + RQ Distributed Queue (`docker-compose.yml`)**:
+    - Replaced in-process queue with Redis 7 task queue & RQ background worker daemon (`backend/worker.py`), keeping 100% API backward compatibility.
+    - Automatic graceful fallback to in-memory async queue when running standalone dev without Redis.
+    - Multi-container orchestration via `docker-compose.yml` (`vton-redis`, `vton-backend-api`, `vton-rq-worker`).
+  - **Cost & Latency Telemetry (Privacy Guaranteed)**:
+    - Automatic cost and latency calculation logged per job: `[Telemetry] Job: <id> | Type: <type> | Provider: <provider> | Latency: <sec>s | Est. Cost: $<usd>`.
+    - Strict privacy rule: zero images, base64 data, filenames, or prompts logged.
+  - **Deployment Documentation & Templates**:
+    - Comprehensive `docs/DEPLOYMENT.md` covering Vercel frontend deployment and Docker Compose backend deployment.
+    - Serverless app templates: `backend/cloud/modal_app.py` and `backend/cloud/runpod_handler.py`.
+    - Unit tests in `backend/test_security.py` verifying providers, cost math, and zero-image logging.
+
 ---
 
 ## How to Run
 
-### 1. Backend (FastAPI)
+### 1. Backend (FastAPI + Redis + RQ)
+#### Option A: Docker Compose (Production / Distributed Scale-Out)
+```bash
+docker compose up -d --build
+```
+Runs Redis 7, FastAPI API service on port 8000, and the RQ worker daemon.
+
+#### Option B: Standalone Python (Local Development)
 ```bash
 cd backend
 python -m pip install -r requirements.txt
 python main.py
 ```
-Backend runs on `http://localhost:8000`. WebSocket endpoint at `ws://localhost:8000/api/tryon/live`.
+Falls back seamlessly to in-process async queue if Redis is not running locally.
 
 ### 2. Frontend (Next.js)
 ```bash
@@ -89,7 +115,7 @@ npm run dev
 
 ### 3. Running Backend Tests & Benchmark
 ```bash
-# Unit tests (9 passing tests: SSRF, rate limit, upload validation, NSFW check)
+# Unit tests (13 passing tests: SSRF, rate limit, upload validation, NSFW, CloudGPUProvider, Telemetry, JobQueue)
 cd backend
 python -m pytest test_security.py
 
@@ -104,6 +130,7 @@ python scripts/benchmark.py
 - On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
 - If mobile network connectivity is slow (RTT > 6s), the studio auto-falls back to Tier-A on-device overlay to preserve camera responsiveness.
 - Under CC BY-NC 4.0 terms, HairFastGAN is strictly for non-commercial evaluation; for commercial deployments, use the SD+IP-Adapter backend.
+- When switching `INFERENCE_PROVIDER` between `local`, `modal`, and `runpod`, update `.env` and restart the worker/backend.
 
 
 

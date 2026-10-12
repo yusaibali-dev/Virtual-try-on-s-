@@ -5,3 +5,5 @@ python-multipart>=0.0.9
 requests>=2.31.0
 pillow>=10.2.0
 numpy>=1.26.0
+redis>=5.0.0
+rq>=1.16.0

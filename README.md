@@ -67,7 +67,25 @@ python main.py
 - Interactive Swagger docs at `http://localhost:8000/docs`
 - WebSocket live streaming at `ws://localhost:8000/api/tryon/live`
 
-### 3. Frontend Setup & Run
+### 3. Distributed Scale-Out via Docker Compose (Redis + RQ Worker)
+
+To run the complete production queue stack locally or on a server:
+```bash
+docker compose up -d --build
+```
+This spins up:
+- **`vton-redis`**: Redis 7 Alpine task broker & state store (`port 6379`).
+- **`vton-backend-api`**: FastAPI API Gateway (`port 8000`).
+- **`vton-rq-worker`**: RQ background worker executing inference via the configured `CloudGPUProvider`.
+
+Configure inference in `.env`:
+```env
+INFERENCE_PROVIDER=modal       # Options: 'modal' (A10G default), 'runpod' (RTX 4090), 'local' (host GPU)
+REDIS_URL=redis://redis:6379/0
+```
+For full Vercel and Cloud deployment instructions, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+### 4. Frontend Setup & Run
 
 ```bash
 cd frontend
