@@ -57,8 +57,8 @@ if app is not None:
         person_img = Image.open(io.BytesIO(person_bytes)).convert("RGB")
         garment_img = Image.open(io.BytesIO(garment_bytes))
 
-        # Model inference execution (CatVTON)
-        # result_img = catvton_pipeline(person=person_img, garment=garment_img, category=category, steps=steps)
+        # Model inference execution (FASHN VTON 1.5)
+        # result_img = fashn_pipeline(person=person_img, garment=garment_img, category=category, steps=steps)
         result_img = person_img # Placeholder for serverless deployment template
 
         buffered = io.BytesIO()

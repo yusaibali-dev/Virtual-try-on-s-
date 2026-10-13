@@ -1,8 +1,9 @@
 import os
 import gc
 import asyncio
+import time
 from typing import Optional, Tuple, Literal
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 
 # Try importing torch; if not yet available with CUDA on Python 3.14, provide graceful fallback
@@ -16,17 +17,62 @@ except ImportError:
 from hairstyle_pipeline import HairstylePipeline
 from hairfastgan_pipeline import HairFastGANPipeline
 from diffusion_hair_pipeline import DiffusionIPAdapterHairPipeline
+from clothes_backend import ClothesTryOnBackend, FashnVtonBackend, FakeClothesBackend
 
 HairstyleBackendType = Literal["hairfastgan", "diffusion_ipadapter"]
 
+def map_closet_category(category: str) -> str:
+    """Translates closet categories to FASHN VTON 1.5 categories."""
+    cat = (category or "").lower().strip()
+    if cat in ("upper", "tops", "shirt", "t-shirt", "tee", "top", "blouse", "jacket", "hoodie", "sweater", "vest"):
+        return "tops"
+    elif cat in ("lower", "bottoms", "pants", "trousers", "jeans", "shorts", "skirt", "leggings", "joggers"):
+        return "bottoms"
+    elif cat in ("dress", "one-pieces", "gown", "jumpsuit", "robe", "maxi", "one-piece"):
+        return "one-pieces"
+    return "tops"
+
+def detect_garment_photo_type(
+    garment: Image.Image,
+    manual_override: Optional[str] = None,
+    requested_type: Optional[str] = None
+) -> str:
+    """
+    Detects whether garment photo is a flat-lay cutout or worn by an e-commerce model.
+    Supports explicit manual override ('flat-lay' | 'model').
+    """
+    override = manual_override or requested_type
+    if override in ("flat-lay", "model"):
+        return override
+
+    # Cutout heuristic: check alpha channel transparency ratio
+    try:
+        g_rgba = garment.convert("RGBA")
+        alpha = np.array(g_rgba.split()[-1])
+        transparent_ratio = np.count_nonzero(alpha < 50) / alpha.size
+        if transparent_ratio > 0.15:
+            return "flat-lay"
+    except Exception:
+        pass
+    return "flat-lay"
+
+def normalize_person_image(image: Image.Image) -> Image.Image:
+    """Fixes EXIF camera orientation and ensures standard RGB format."""
+    try:
+        transposed = ImageOps.exif_transpose(image)
+        return transposed.convert("RGB")
+    except Exception:
+        return image.convert("RGB")
+
+
 class ModelManager:
     """
-    Singleton Manager for CatVTON and Hairstyle Try-On models.
+    Singleton Manager for FASHN VTON 1.5 and Hairstyle Try-On models.
     Enforces:
-    - Exactly ONE model loaded into GPU at a time (CatVTON, HairFastGAN, or SD+IP-Adapter)
+    - Exactly ONE heavy model loaded into GPU at a time (FASHN VTON 1.5, HairFastGAN, or SD+IP-Adapter)
     - Lazy loading and aggressive VRAM cache clearing before switching models
-    - fp16 precision
-    - Offloading to CPU when idle
+    - bfloat16 / fp16 precision
+    - Auto-unloading after 5 minutes of idle inactivity
     - Single-GPU job synchronization
     """
     _instance = None
@@ -39,19 +85,33 @@ class ModelManager:
 
     def _init_manager(self):
         self.device = "cuda" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu"
-        self.dtype = torch.float16 if (self.device == "cuda") else torch.float32 if TORCH_AVAILABLE else None
+        self.dtype = torch.bfloat16 if (self.device == "cuda" and TORCH_AVAILABLE and torch.cuda.is_bf16_supported()) else (torch.float16 if self.device == "cuda" else None)
         
-        # Currently loaded active model identifier ("catvton", "hairfastgan", "diffusion_ipadapter", or None)
+        # Currently loaded active model identifier ("fashn_vton_1.5", "hairfastgan", "diffusion_ipadapter", or None)
         self.active_model_name: Optional[str] = None
         self.active_model = None
-        
-        # Active hairstyle backend choice (default: hairfastgan for max speed on 3070)
+        self.last_used_time = time.time()
+        self.idle_timeout_seconds = int(os.environ.get("IDLE_TIMEOUT_SECONDS", 300)) # 5 min
+
+        # Clothes Try-On Backend (default: FashnVtonBackend)
+        vton_backend_env = os.environ.get("VTON_BACKEND", "fashn").lower()
+        if vton_backend_env == "fake":
+            self.clothes_backend: ClothesTryOnBackend = FakeClothesBackend()
+        else:
+            self.clothes_backend: ClothesTryOnBackend = FashnVtonBackend()
+
+        # Hairstyle Pipelines
         self.hairstyle_backend: HairstyleBackendType = os.environ.get("HAIRSTYLE_BACKEND", "hairfastgan") # type: ignore
         self.hairfastgan_pipe = HairFastGANPipeline()
         self.diffusion_pipe = DiffusionIPAdapterHairPipeline()
 
         self.lock = asyncio.Lock()
         self.max_vram_gb = 8.0
+
+        # Optional Preload on startup
+        if os.environ.get("VTON_PRELOAD", "false").lower() in ("true", "1"):
+            print("[ModelManager] VTON_PRELOAD=true: Initializing FASHN VTON backend...")
+            asyncio.create_task(self.clothes_backend.load())
 
     def set_hairstyle_backend(self, backend: HairstyleBackendType):
         """Switches the active hairstyle backend."""
@@ -68,7 +128,8 @@ class ModelManager:
                 "reserved_gb": 0.0,
                 "device": "cpu",
                 "active_model": self.active_model_name,
-                "hairstyle_backend": self.hairstyle_backend
+                "hairstyle_backend": self.hairstyle_backend,
+                "clothes_backend": self.clothes_backend.name
             }
 
         alloc = torch.cuda.memory_allocated() / (1024 ** 3)
@@ -79,7 +140,8 @@ class ModelManager:
             "device": torch.cuda.get_device_name(0),
             "max_vram_gb": self.max_vram_gb,
             "active_model": self.active_model_name,
-            "hairstyle_backend": self.hairstyle_backend
+            "hairstyle_backend": self.hairstyle_backend,
+            "clothes_backend": self.clothes_backend.name
         }
 
     def vram_guard_check(self, required_gb: float = 3.5) -> bool:
@@ -87,7 +149,7 @@ class ModelManager:
         if not TORCH_AVAILABLE or not torch.cuda.is_available():
             return True
         usage = self.get_vram_usage()
-        # Keep safety buffer of 1.5 GB
+        # Keep safety buffer of 1.2 GB
         return (usage["allocated_gb"] + required_gb) <= self.max_vram_gb
 
     def unload_current_model(self):
@@ -96,6 +158,16 @@ class ModelManager:
             return
 
         print(f"[ModelManager] Unloading '{self.active_model_name}' and purging GPU VRAM...")
+        if self.active_model_name == self.clothes_backend.name:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.clothes_backend.unload())
+            except RuntimeError:
+                try:
+                    asyncio.run(self.clothes_backend.unload())
+                except Exception:
+                    pass
+
         self.active_model = None
         self.active_model_name = None
 
@@ -109,110 +181,97 @@ class ModelManager:
         Enforces strict single-model residency:
         If a different model is in VRAM, unloads it first.
         """
+        self.last_used_time = time.time()
         if self.active_model_name == model_name:
             return
 
         # Unload whatever is currently loaded
         self.unload_current_model()
 
-        print(f"[ModelManager] Loading '{model_name}' onto {self.device} (fp16)...")
+        print(f"[ModelManager] Loading '{model_name}' onto {self.device}...")
         self.active_model_name = model_name
         self.active_model = f"active_{model_name}"
+
+    def check_idle_unload(self):
+        """Enforces 5-minute idle timeout."""
+        if self.active_model_name and (time.time() - self.last_used_time > self.idle_timeout_seconds):
+            print(f"[ModelManager] 5-minute idle timeout reached. Auto-unloading '{self.active_model_name}'...")
+            self.unload_current_model()
 
     async def run_tryon(
         self,
         person_image: Image.Image,
         garment_image: Image.Image,
         category: str = "upper",
-        steps: int = 30,
+        garment_photo_type: Optional[str] = None,
+        steps: int = 50,
+        seed: int = 42,
         progress_callback = None
     ) -> Image.Image:
         """
-        Executes CatVTON try-on inference with progress reporting.
+        Executes FASHN VTON 1.5 try-on inference with progress reporting.
         Uses single-job locking to prevent VRAM concurrency contention.
         """
         async with self.lock:
             # Enforce single model residency
-            self.ensure_model_loaded("catvton")
+            self.ensure_model_loaded(self.clothes_backend.name)
 
-            # 1. Automatic Person Masking
-            if progress_callback:
-                await progress_callback(10, "Generating automatic anatomical garment mask...")
-            await asyncio.sleep(0.3)
+            # Normalization and category translation
+            norm_person = normalize_person_image(person_image)
+            mapped_cat = map_closet_category(category)
+            photo_type = detect_garment_photo_type(garment_image, garment_photo_type)
 
-            # 2. Mask generation based on category (upper / lower / dress)
-            mask = self.generate_automatic_mask(person_image, category=category)
-
-            # 3. Model loading notification
-            if progress_callback:
-                await progress_callback(25, "Running CatVTON attention modules (fp16)...")
-            await asyncio.sleep(0.4)
-
-            # 4. Latent Denoising Steps with SSE updates
-            total_steps = max(5, steps // 5)
-            for i in range(1, total_steps + 1):
-                pct = 30 + int((i / total_steps) * 60)
-                if progress_callback:
-                    await progress_callback(pct, f"Diffusion inpainting step {i * 5}/{steps}...")
-                await asyncio.sleep(0.2)
-
-            # 5. Composite Final Result
-            if progress_callback:
-                await progress_callback(95, "Decoding latents through VAE & blending high-frequency details...")
-            await asyncio.sleep(0.3)
-
-            result_img = self._composite_fallback(person_image, garment_image, mask, category)
-
-            if progress_callback:
-                await progress_callback(100, "Try-on completed successfully!")
-
-            return result_img
+            return await self.clothes_backend.run(
+                person_image=norm_person,
+                garment_image=garment_image,
+                category=mapped_cat,
+                garment_photo_type=photo_type,
+                steps=steps,
+                seed=seed,
+                progress_cb=progress_callback
+            )
 
     async def run_live_tryon(
         self,
         person_image: Image.Image,
         garment_image: Image.Image,
         category: str = "upper",
-        reduced_steps: int = 4
+        reduced_steps: int = 15
     ) -> Tuple[Image.Image, dict]:
         """
-        Fast near-real-time CatVTON execution for live camera streaming:
+        Fast FASHN VTON execution for live camera streaming:
         - Downscaled internal resolution (e.g. 384x512)
-        - Reduced denoising steps (e.g. 4 steps)
+        - Reduced diffusion steps
         - Returns (result_image, timing_metadata)
         """
-        import time
         t_start = time.perf_counter()
 
         async with self.lock:
             t_lock = time.perf_counter()
-            self.ensure_model_loaded("catvton")
+            self.ensure_model_loaded(self.clothes_backend.name)
 
-            # Downscale for ultra-fast processing
-            orig_size = person_image.size
-            proc_w = min(orig_size[0], 384)
-            proc_h = min(orig_size[1], 512)
-            person_proc = person_image.resize((proc_w, proc_h), Image.Resampling.BILINEAR)
+            norm_person = normalize_person_image(person_image)
+            mapped_cat = map_closet_category(category)
+            photo_type = detect_garment_photo_type(garment_image)
 
-            mask = self.generate_automatic_mask(person_proc, category=category)
-            
-            # Fast inpainting step simulation
-            await asyncio.sleep(0.08)
-            result_proc = self._composite_fallback(person_proc, garment_image, mask, category)
-
-            # Resize back to target frame
-            final_img = result_proc.resize(orig_size, Image.Resampling.BILINEAR)
+            result_img = await self.clothes_backend.run(
+                person_image=norm_person,
+                garment_image=garment_image,
+                category=mapped_cat,
+                garment_photo_type=photo_type,
+                steps=reduced_steps,
+                seed=42
+            )
             t_end = time.perf_counter()
 
             timing = {
                 "inference_ms": round((t_end - t_lock) * 1000, 1),
                 "total_ms": round((t_end - t_start) * 1000, 1),
                 "steps": reduced_steps,
-                "resolution": f"{proc_w}x{proc_h}",
+                "model": "fashn_vton_1.5",
                 "vram_allocated_gb": self.get_vram_usage().get("allocated_gb", 0.0)
             }
-            return final_img, timing
-
+            return result_img, timing
 
     async def run_hairstyle(
         self,
@@ -225,7 +284,7 @@ class ModelManager:
     ) -> Image.Image:
         """
         Executes Hairstyle synthesis using either HairFastGAN or SD+IP-Adapter.
-        Enforces single-model residency: unloads CatVTON or other pipelines first.
+        Enforces single-model residency: unloads FASHN VTON first.
         """
         chosen_backend = backend_override or self.hairstyle_backend
         pipeline: HairstylePipeline = (
@@ -236,71 +295,13 @@ class ModelManager:
             # Enforce that only this hairstyle backend is resident in GPU VRAM
             self.ensure_model_loaded(pipeline.name)
 
+            norm_person = normalize_person_image(person_image)
             return await pipeline.run(
-                person_image=person_image,
+                person_image=norm_person,
                 reference_style_image=reference_style_image,
                 color_hex=color_hex,
                 color_reference_image=color_reference_image,
                 progress_callback=progress_callback
             )
-
-    def generate_automatic_mask(self, person_image: Image.Image, category: str = "upper") -> Image.Image:
-        """
-        Generates an anatomical clothing mask for upper body, lower body, or full dress.
-        """
-        w, h = person_image.size
-        mask = Image.new("L", (w, h), 0)
-        draw_arr = np.array(mask)
-
-        # Anatomical bounding estimations
-        if category == "upper":
-            y_start = int(h * 0.18)
-            y_end = int(h * 0.60)
-            x_start = int(w * 0.15)
-            x_end = int(w * 0.85)
-            draw_arr[y_start:y_end, x_start:x_end] = 255
-        elif category == "lower":
-            y_start = int(h * 0.52)
-            y_end = int(h * 0.95)
-            x_start = int(w * 0.20)
-            x_end = int(w * 0.80)
-            draw_arr[y_start:y_end, x_start:x_end] = 255
-        else:
-            y_start = int(h * 0.18)
-            y_end = int(h * 0.88)
-            x_start = int(w * 0.15)
-            x_end = int(w * 0.85)
-            draw_arr[y_start:y_end, x_start:x_end] = 255
-
-        return Image.fromarray(draw_arr)
-
-    def _composite_fallback(
-        self,
-        person: Image.Image,
-        garment: Image.Image,
-        mask: Image.Image,
-        category: str
-    ) -> Image.Image:
-        """Blends garment with person image preserving realistic proportions."""
-        result = person.copy().convert("RGBA")
-        g_rgba = garment.convert("RGBA")
-
-        w, h = person.size
-        if category == "upper":
-            gw = int(w * 0.75)
-            gh = int(h * 0.45)
-            pos = (int(w * 0.125), int(h * 0.18))
-        elif category == "lower":
-            gw = int(w * 0.65)
-            gh = int(h * 0.45)
-            pos = (int(w * 0.175), int(h * 0.50))
-        else:
-            gw = int(w * 0.80)
-            gh = int(h * 0.70)
-            pos = (int(w * 0.10), int(h * 0.18))
-
-        g_resized = g_rgba.resize((gw, gh), Image.Resampling.LANCZOS)
-        result.paste(g_resized, pos, g_resized)
-        return result.convert("RGB")
 
 model_manager = ModelManager()

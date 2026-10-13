@@ -1422,12 +1422,12 @@ export default function StudioPage() {
           <span className="text-neutral-300">
             {liveAiActive ? (
               <>
-                Streaming adaptive frames (~{liveAiFps.toFixed(1)} fps) to single-GPU CatVTON pipeline. Latency:{" "}
+                Streaming adaptive frames (~{liveAiFps.toFixed(1)} fps) to single-GPU FASHN VTON pipeline. Latency:{" "}
                 <strong className="text-cyan-300 font-mono">{liveAiLatencyMs}ms</strong>. Tier-A overlay stays smoothly active between updates.
               </>
             ) : (
               <>
-                On-device real-time neural tracking &amp; garment warp. Toggle <strong className="text-cyan-400">Live AI</strong> below for near-real-time CatVTON, or tap <strong className="text-purple-300">Capture &amp; Enhance</strong> for high-res photo fitting.
+                On-device real-time neural tracking &amp; garment warp. Toggle <strong className="text-cyan-400">Live AI</strong> below for near-real-time FASHN VTON, or tap <strong className="text-purple-300">Capture &amp; Enhance</strong> for high-res photo fitting.
               </>
             )}
           </span>
@@ -1454,7 +1454,7 @@ export default function StudioPage() {
               }}
             />
 
-            {/* Milestone 7: Live AI Crossfade Image Layer (Near-Real-Time CatVTON Result) */}
+            {/* Milestone 7: Live AI Crossfade Image Layer (Near-Real-Time FASHN VTON Result) */}
             {liveAiActive && liveAiImage && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -1644,7 +1644,7 @@ export default function StudioPage() {
                   setLiveAiFallbackReason(null);
                   setLiveAiActive(!liveAiActive);
                 }}
-                title="Toggle Near-Real-Time Live AI CatVTON Stream"
+                title="Toggle Near-Real-Time Live AI FASHN VTON Stream"
                 className={`px-3 py-2 rounded-2xl border backdrop-blur-md shadow-xl flex items-center gap-2 text-xs font-semibold transition-all active:scale-95 ${
                   liveAiActive
                     ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-neutral-950 border-cyan-300 shadow-cyan-500/30"
@@ -1710,7 +1710,7 @@ export default function StudioPage() {
                     setIsEnhancing(false);
                   }
                 }}
-                title="Capture & Enhance current frame with full-resolution CatVTON diffusion"
+                title="Capture & Enhance current frame with full-resolution FASHN VTON diffusion"
                 className="px-3.5 py-2 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-xl shadow-purple-500/25 flex items-center gap-2 text-xs font-semibold transition-all active:scale-95 disabled:opacity-50"
               >
                 <Wand2 className={`w-4 h-4 text-amber-300 ${isEnhancing ? "animate-spin" : ""}`} />

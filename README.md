@@ -2,8 +2,8 @@
 
 A production-grade, privacy-first Virtual Try-On (VTON) and Hair Styling web application featuring:
 - **On-Device Real-Time Vision**: MediaPipe (Face, Pose, Hands) running in WASM/WebGL at 25+ FPS for instant zero-latency preview.
-- **Near-Real-Time AI Quality**: WebSocket stream (`WS /api/tryon/live`) with latest-frame-wins backpressure, streaming CatVTON diffusion updates smoothly overlaid onto the live camera.
-- **Photorealistic Diffusion Try-On**: CatVTON inpainting and dual hairstyle backends (HairFastGAN & Stable Diffusion 1.5 + IP-Adapter) optimized for NVIDIA GPUs (RTX 3070 8 GB VRAM).
+- **Near-Real-Time AI Quality**: WebSocket stream (`WS /api/tryon/live`) with latest-frame-wins backpressure, streaming FASHN VTON updates smoothly overlaid onto the live camera.
+- **Photorealistic Diffusion Try-On**: FASHN VTON 1.5 inpainting and dual hairstyle backends (HairFastGAN & Stable Diffusion 1.5 + IP-Adapter) optimized for NVIDIA GPUs (RTX 3070 8 GB VRAM).
 - **Privacy & Data Protection**: User consent screen, in-memory live streaming (zero image logging), 1-hour TTL auto-deletion of temporary photos, and an instant "Delete my data" GDPR purge.
 - **PWA & Mobile Support**: Installable Progressive Web App with full mobile camera access over HTTPS.
 

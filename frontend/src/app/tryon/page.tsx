@@ -33,13 +33,14 @@ interface ClosetItem {
 }
 
 export default function PhotoTryonPage() {
-  // Mode: "clothing" (CatVTON) vs "hairstyle" (HairFastGAN / SD+IP-Adapter)
+  // Mode: "clothing" (FASHN VTON 1.5) vs "hairstyle" (HairFastGAN / SD+IP-Adapter)
   const [tryonMode, setTryonMode] = useState<"clothing" | "hairstyle">("hairstyle");
 
   // Closet items
   const [closetItems, setClosetItems] = useState<ClosetItem[]>([]);
   const [selectedGarment, setSelectedGarment] = useState<ClosetItem | null>(null);
   const [category, setCategory] = useState<"upper" | "lower" | "dress">("upper");
+  const [garmentPhotoType, setGarmentPhotoType] = useState<"auto" | "flat-lay" | "model">("auto");
 
   // Person photo
   const [personFile, setPersonFile] = useState<File | null>(null);
@@ -155,7 +156,7 @@ export default function PhotoTryonPage() {
     setErrorMsg(null);
     setIsProcessing(true);
     setProgressPercent(5);
-    setProgressMessage(`Submitting job to GPU queue (${tryonMode === "hairstyle" ? hairstyleBackend : "CatVTON"})...`);
+    setProgressMessage(`Submitting job to GPU queue (${tryonMode === "hairstyle" ? hairstyleBackend : "FASHN VTON 1.5"})...`);
     setResultUrl(null);
 
     try {
@@ -180,6 +181,9 @@ export default function PhotoTryonPage() {
           formData.append("closet_item_id", selectedGarment.id);
         }
         formData.append("category", category);
+        if (garmentPhotoType !== "auto") {
+          formData.append("garment_photo_type", garmentPhotoType);
+        }
       }
 
       const res = await fetch(endpoint, {
@@ -305,7 +309,7 @@ export default function PhotoTryonPage() {
               </div>
               <div>
                 <h1 className="font-semibold text-sm sm:text-base leading-none">Photo Try-On Studio</h1>
-                <p className="text-[11px] text-cyan-400 mt-0.5">CatVTON &amp; Hairstyle Neural Transfer</p>
+                <p className="text-[11px] text-cyan-400 mt-0.5">FASHN VTON 1.5 &amp; Hairstyle Neural Transfer</p>
               </div>
             </div>
           </div>
@@ -333,7 +337,7 @@ export default function PhotoTryonPage() {
                 }`}
               >
                 <Shirt className="w-3.5 h-3.5" />
-                <span>Clothes (CatVTON)</span>
+                <span>Clothes (FASHN VTON 1.5)</span>
               </button>
             </div>
 
@@ -397,7 +401,7 @@ export default function PhotoTryonPage() {
                 </div>
 
                 <span className="absolute bottom-4 right-4 px-2.5 py-1 rounded-md bg-cyan-500/80 backdrop-blur-md text-[10px] font-mono text-neutral-950 font-bold">
-                  AFTER ({tryonMode === "hairstyle" ? hairstyleBackend : "CatVTON"})
+                  AFTER ({tryonMode === "hairstyle" ? hairstyleBackend : "FASHN VTON 1.5"})
                 </span>
 
                 {/* Slider Divider Handle */}
@@ -702,6 +706,36 @@ export default function PhotoTryonPage() {
                       {cat.label}
                     </button>
                   ))}
+                </div>
+
+                {/* FASHN VTON 1.5 Garment Photo Type (Flat-lay vs Model-worn) */}
+                <div className="pt-2 border-t border-neutral-800/80">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-medium text-neutral-300">Garment Source Photo</span>
+                    <span className="text-[10px] text-cyan-400 font-mono">FASHN 1.5</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        { id: "auto", label: "Auto Detect" },
+                        { id: "flat-lay", label: "Flat-Lay" },
+                        { id: "model", label: "On Model" }
+                      ] as const
+                    ).map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setGarmentPhotoType(t.id)}
+                        className={`p-2 rounded-xl border text-[11px] font-medium transition-all ${
+                          garmentPhotoType === t.id
+                            ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 font-semibold"
+                            : "bg-neutral-800/40 border-neutral-800 text-neutral-400 hover:bg-neutral-800"
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 

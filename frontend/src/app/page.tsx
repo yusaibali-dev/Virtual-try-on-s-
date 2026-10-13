@@ -127,7 +127,7 @@ export default function Home() {
             </div>
             <h3 className="text-base font-semibold text-white mb-2">VTON Ready Architecture</h3>
             <p className="text-xs text-neutral-400 leading-relaxed">
-              Scaffolded monorepo prepared for CatVTON and HairFastGAN diffusion pipeline on an RTX 3070 with 8 GB VRAM.
+              Scaffolded monorepo running FASHN VTON 1.5 and HairFastGAN neural pipeline on an RTX 3070 with 8 GB VRAM.
             </p>
           </div>
         </div>

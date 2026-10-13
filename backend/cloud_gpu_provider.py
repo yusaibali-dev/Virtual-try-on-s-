@@ -180,7 +180,7 @@ class ModalGPUProvider(CloudGPUProvider):
         if self.endpoint_url and self.api_key:
             import requests
             if progress_callback:
-                await progress_callback(30, "Modal container executing CatVTON pipeline...")
+                await progress_callback(30, "Modal container executing FASHN VTON 1.5 pipeline...")
 
             payload = {
                 "person_b64": _image_to_base64(person_image),

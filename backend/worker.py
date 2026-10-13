@@ -26,7 +26,7 @@ def execute_tryon_task(
     steps: int = 30
 ):
     """
-    RQ worker task executing CatVTON try-on inference.
+    RQ worker task executing FASHN VTON 1.5 try-on inference.
     """
     start_time = time.time()
     provider = get_cloud_provider()

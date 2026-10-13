@@ -12,12 +12,12 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "backend"))
 from model_manager import model_manager
 
 """
-Hairstyle & CatVTON Dual-Backend Performance Benchmark
+Hairstyle & FASHN VTON Multi-Backend Performance Benchmark
 ======================================================
 Evaluates and compares:
 1. HairFastGAN (StyleGAN2 latent space inversion)
 2. Face-Parsing + SD 1.5 Inpainting + IP-Adapter
-3. CatVTON Garment Try-On
+3. FASHN VTON 1.5 Garment Try-On
 
 Metrics measured:
 - Latency / Seconds per image

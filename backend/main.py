@@ -408,7 +408,13 @@ class TryonJobRequest(BaseModel):
     closet_item_id: str
     category: Optional[str] = "upper"  # upper, lower, dress
 
-async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: bytes, category: str):
+async def process_tryon_job(
+    job_id: str,
+    person_bytes: bytes,
+    garment_bytes: bytes,
+    category: str,
+    garment_photo_type: str = "flat-lay"
+):
     start_time = time.time()
     provider = get_cloud_provider()
     try:
@@ -432,7 +438,7 @@ async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: byt
             person_image=person_img,
             garment_image=garment_img,
             category=category,
-            steps=30,
+            steps=50,
             progress_callback=on_progress
         )
 
@@ -475,7 +481,8 @@ async def process_tryon_job(job_id: str, person_bytes: bytes, garment_bytes: byt
 async def create_photo_tryon_job(
     person_photo: UploadFile = File(...),
     closet_item_id: str = Form(...),
-    category: str = Form("upper")
+    category: str = Form("upper"),
+    garment_photo_type: str = Form("flat-lay")
 ):
     """
     Submits a photo try-on job to the scaled-out Redis+RQ or async job queue.
@@ -498,7 +505,7 @@ async def create_photo_tryon_job(
         job_id=job_id,
         job_type="tryon",
         category=category,
-        details={"closet_item_id": closet_item_id}
+        details={"closet_item_id": closet_item_id, "garment_photo_type": garment_photo_type}
     )
 
     # If Redis + RQ is running, dispatch to RQ distributed worker
@@ -509,11 +516,11 @@ async def create_photo_tryon_job(
             person_bytes,
             garment_bytes,
             category,
-            30
+            50
         )
     else:
         # Launch async task
-        asyncio.create_task(process_tryon_job(job_id, person_bytes, garment_bytes, category))
+        asyncio.create_task(process_tryon_job(job_id, person_bytes, garment_bytes, category, garment_photo_type))
 
     return {
         "job_id": job_id,
@@ -778,7 +785,7 @@ async def create_hairstyle_job(
 @app.websocket("/api/tryon/live")
 async def websocket_live_tryon(websocket: WebSocket):
     """
-    WebSocket endpoint for near-real-time live CatVTON camera stream.
+    WebSocket endpoint for near-real-time live FASHN VTON camera stream.
     Features:
     - Latest-frame-wins backpressure (drops stale queued frames, never backlogs)
     - Reduced resolution & steps
@@ -857,7 +864,7 @@ async def websocket_live_tryon(websocket: WebSocket):
 
             person_img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
 
-            # Execute fast live CatVTON
+            # Execute fast live FASHN VTON
             result_img, timing = await model_manager.run_live_tryon(
                 person_image=person_img,
                 garment_image=garment_img,

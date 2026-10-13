@@ -8,10 +8,10 @@ This document inventories every third-party model, neural network checkpoint, da
 
 | Component / Model | Repository / Creator | License | Commercial Use Allowed? | Notes & Usage Scope |
 | :--- | :--- | :--- | :---: | :--- |
-| **MediaPipe Tasks Vision** | Google LLC | **Apache 2.0** | **YES** | Real-time face landmarking, pose estimation, and hand tracking run 100% on-device in WASM/WebGL. Fully commercial friendly. |
-| **CatVTON** | Zheng et al. (Zheng-Chong/CatVTON) | **Apache 2.0** / Academic | **YES / CONDITIONAL** | Attention-based virtual garment try-on. Base code is Apache 2.0; underlying SD 1.5 inpainting weights follow CreativeML OpenRAIL-M. |
-| **Stable Diffusion 1.5 Inpainting** | RunwayML / Stability AI | **CreativeML OpenRAIL-M** | **YES (with restrictions)** | Permits commercial use subject to standard ethical OpenRAIL use restrictions (no non-consensual generation, illegal imagery). |
-| **HairFastGAN** | AIRI Institute (AIRI-Institute/HairFastGAN) | **CC BY-NC 4.0** (Non-Commercial) | **NO (Academic / Evaluation Only)** | High-fidelity StyleGAN2-based hairstyle transfer. Restriced to non-commercial research and evaluation. For enterprise SaaS, switch to SD+IP-Adapter or retrain generator on commercial dataset. |
+| **FASHN VTON v1.5** | FASHN AI (fashn-AI/fashn-vton-1.5) | **Apache 2.0** | **YES** | Pixel-space maskless diffusion transformer for garment try-on. Fully commercial friendly. |
+| **DWPose** | IDEA-Research / FASHN AI | **Apache 2.0** | **YES** | Whole-body pose and keypoint detector ONNX runtime weights. Commercial friendly. |
+| **Stable Diffusion 1.5 Inpainting** | RunwayML / Stability AI | **CreativeML OpenRAIL-M** | **YES (with restrictions)** | Used as fallback in hairstyle diffusion pipeline. |
+| **HairFastGAN** | AIRI Institute (AIRI-Institute/HairFastGAN) | **CC BY-NC 4.0** (Non-Commercial) | **NO (Academic / Evaluation Only)** | High-fidelity StyleGAN2-based hairstyle transfer. Restricted to non-commercial research and evaluation. For enterprise SaaS, switch to SD+IP-Adapter or retrain generator on commercial dataset. |
 | **IP-Adapter** | Tencent AI Lab (h94/IP-Adapter) | **Apache 2.0** | **YES** | Image prompt visual adapter for diffusion models. Commercial friendly. |
 | **rembg** | Daniel Gatis (danielgatis/rembg) | **MIT** | **YES** | Background removal library. Uses U2Net model by default. |
 | **U2Net** | Qin et al. (xuebinqin/U-2-Net) | **Apache 2.0** | **YES** | Salient object detection network for background removal. |
