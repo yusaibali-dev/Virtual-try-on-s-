@@ -66,9 +66,7 @@ export default function PhotoTryonPage() {
   const sliderContainerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
 
-  const apiBase = typeof window !== "undefined"
-    ? `http://${window.location.hostname}:8000`
-    : "http://localhost:8000";
+  const apiBase = "";
 
   // Load user closet items & hairstyle config
   useEffect(() => {
@@ -196,38 +194,72 @@ export default function PhotoTryonPage() {
 
       const jobData = await res.json();
       const currentJobId = jobData.job_id;
-      setJobId(currentJobId);
+      // Connect to progress updates (WebSocket with polling fallback for Cloudflare tunnel resilience)
+      let closed = false;
+      const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+      const host = typeof window !== "undefined" ? window.location.host : "";
+      const wsUrl = `${proto}//${host}/api/jobs/${currentJobId}/ws`;
 
-      // Connect to Server-Sent Events (SSE) Stream for real-time progress
-      const eventSource = new EventSource(`${apiBase}/api/jobs/${currentJobId}/stream`);
+      const handleUpdate = (data: any) => {
+        if (closed) return;
+        if (data.percent !== undefined) setProgressPercent(data.percent);
+        if (data.message) setProgressMessage(data.message);
 
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.percent !== undefined) setProgressPercent(data.percent);
-          if (data.message) setProgressMessage(data.message);
-
-          if (data.status === "completed") {
-            setIsProcessing(false);
-            setResultUrl(`${apiBase}${data.result_url}`);
-            eventSource.close();
-          } else if (data.status === "failed") {
-            setIsProcessing(false);
-            setErrorMsg(data.message || "Pipeline synthesis failed.");
-            eventSource.close();
-          } else if (data.status === "cancelled") {
-            setIsProcessing(false);
-            setProgressMessage("Job cancelled.");
-            eventSource.close();
-          }
-        } catch (err) {
-          console.warn("SSE parse error:", err);
+        if (data.status === "completed") {
+          closed = true;
+          setIsProcessing(false);
+          setResultUrl(data.result_url ? `${data.result_url}` : "");
+        } else if (data.status === "failed") {
+          closed = true;
+          setIsProcessing(false);
+          setErrorMsg(data.message || "Pipeline synthesis failed.");
+        } else if (data.status === "cancelled") {
+          closed = true;
+          setIsProcessing(false);
+          setProgressMessage("Job cancelled.");
         }
       };
 
-      eventSource.onerror = () => {
-        eventSource.close();
+      // Polling fallback
+      let pollTimer: NodeJS.Timeout | null = null;
+      const startPolling = () => {
+        if (pollTimer || closed) return;
+        pollTimer = setInterval(async () => {
+          if (closed) {
+            if (pollTimer) clearInterval(pollTimer);
+            return;
+          }
+          try {
+            const pollRes = await fetch(`/api/jobs/${currentJobId}`);
+            if (pollRes.ok) {
+              const pData = await pollRes.json();
+              handleUpdate(pData);
+            }
+          } catch (e) {}
+        }, 1000);
       };
+
+      try {
+        const ws = new WebSocket(wsUrl);
+        ws.onmessage = (event) => {
+          try {
+            const raw = JSON.parse(event.data);
+            const data = typeof raw.data === "string" ? JSON.parse(raw.data) : (raw.data || raw);
+            handleUpdate(data);
+            if (closed) ws.close();
+          } catch (err) {
+            console.warn("WS parse error:", err);
+          }
+        };
+        ws.onerror = () => {
+          startPolling();
+        };
+        ws.onclose = () => {
+          if (!closed) startPolling();
+        };
+      } catch (err) {
+        startPolling();
+      }
     } catch (err: any) {
       setIsProcessing(false);
       setErrorMsg(err.message || "An error occurred during inference.");

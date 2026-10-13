@@ -84,6 +84,18 @@
     - Serverless app templates: `backend/cloud/modal_app.py` and `backend/cloud/runpod_handler.py`.
     - Unit tests in `backend/test_security.py` verifying providers, cost math, and zero-image logging.
 
+### Milestone: Single-Link Access & Reverse Proxy Architecture (Part A)
+- **Status**: **Done**
+- **Components Built**:
+  - **Single-Origin Caddy Reverse Proxy (`Caddyfile`)**: Proxies `/` to Next.js (`127.0.0.1:3001`) and `/api/*` + `/storage/*` to FastAPI (`127.0.0.1:8000`), with full WebSocket upgrades (`/api/tryon/live` and `/api/jobs/{id}/ws`).
+  - **Internal Network Isolation**: Next.js, FastAPI, and GPU workers bound exclusively to `127.0.0.1`. Verified with `scripts/verify_network_isolation.py` (0 internal ports exposed to LAN).
+  - **100% Self-Hosted Runtime**: MediaPipe vision models (`face_landmarker.task`, `pose_landmarker_lite.task`, `hand_landmarker.task`, `hair_segmenter.tflite`) downloaded locally into `/models/` alongside WASM `/wasm/` (zero external CDN requests).
+  - **Relative Path Refactor**: Stripped all hard-coded `localhost:8000` URLs, ports, and permissive CORS across `/studio`, `/closet`, and `/tryon`.
+  - **Unified Runner (`scripts/run.py`)**: One-command runner (`npm run start:all` & `npm run dev:all`) starting all services, health-checking loopback, capturing logs into `/logs/`, and printing exactly **ONE public HTTPS link + ANSI QR code**.
+  - **Access Gate Protection**: Passcode modal (`ACCESS_CODE`) on `/gate` and signed HTTP-only cookies protecting public tunnel traffic from unauthorized access.
+  - **Tunnel Documentation (`docs/TUNNELS.md`)**: Comprehensive analysis of Cloudflare quick tunnels, Cloudflare named tunnels (Zero Trust), Tailscale Funnel, and ngrok static domains.
+  - **Unit Tests (`backend/test_access_gate.py`)**: Automated verification of gate enforcement and authentication flow (15/15 tests passing).
+
 ---
 
 ## How to Run

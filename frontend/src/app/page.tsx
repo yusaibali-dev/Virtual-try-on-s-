@@ -136,13 +136,13 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-neutral-800/60 py-6 text-center text-xs text-neutral-500">
         <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span>Virtual Try-On Web App · Milestone 1: Scaffold & Camera</span>
+          <span>Virtual Try-On Web App · Single Origin Architecture</span>
           <div className="flex items-center gap-4 text-neutral-400">
             <Link href="/studio" className="hover:text-cyan-400 transition-colors">Studio</Link>
             <span>·</span>
-            <span>FastAPI Backend (:8000)</span>
+            <Link href="/closet" className="hover:text-cyan-400 transition-colors">Closet</Link>
             <span>·</span>
-            <span>Next.js Frontend (:3000)</span>
+            <Link href="/tryon" className="hover:text-cyan-400 transition-colors">Photo Try-On</Link>
           </div>
         </div>
       </footer>

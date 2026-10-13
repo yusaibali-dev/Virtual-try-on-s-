@@ -43,12 +43,37 @@ A production-grade, privacy-first Virtual Try-On (VTON) and Hair Styling web app
 
 ---
 
-## Quickstart
+## How to Open the Site (One Command, One Link)
 
-### 1. Prerequisites
-- Python 3.10+ (CUDA GPU recommended; CPU fallback available)
-- Node.js 18+ and npm
-- Optional for mobile testing: `cloudflared` (Cloudflare Tunnel)
+To run the entire platform with a single command and receive exactly **one HTTPS link + QR code** for your phone:
+
+```bash
+# 1. Production Mode (Recommended for testing on phones)
+npm run start:all
+
+# 2. Hot-Reload Development Mode
+npm run dev:all
+```
+
+This supervisor script (`scripts/run.py`):
+1. Starts the isolated GPU worker, FastAPI backend (`127.0.0.1:8000`), Next.js frontend (`127.0.0.1:3001`), and Caddy reverse proxy (`PORT=3000`).
+2. Secures all internal service ports to loopback (100% unreachable from LAN).
+3. Connects the public tunnel (Cloudflare quick tunnel by default) and prints **ONE** link:
+   ```text
+   ================================================================
+   VTON Studio is Live!
+   Open the site: https://<your-tunnel>.trycloudflare.com
+   Access Passcode: 849201
+
+   [Scan QR code with phone camera]
+   ================================================================
+   ```
+4. Prompts for the 6-digit access passcode on the mobile gate screen before unlocking camera and try-on capabilities.
+5. Shuts down all services cleanly upon pressing `Ctrl+C`.
+
+---
+
+## Quickstart (Manual / Component Mode)
 
 ### 2. Backend Setup & Run
 

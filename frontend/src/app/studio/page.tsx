@@ -196,22 +196,20 @@ export default function StudioPage() {
   const frameTimestampsRef = useRef<number[]>([]);
   const lastMetricsUpdateRef = useRef<number>(0);
 
-  // Fetch closet items from backend
-  const apiBase = typeof window !== "undefined"
-    ? `http://${window.location.hostname}:8000`
-    : "http://localhost:8000";
+  // Fetch closet items from backend (single-origin relative)
+  const apiBase = "";
 
   useEffect(() => {
     async function loadCloset() {
       try {
-        const res = await fetch(`${apiBase}/api/items`);
+        const res = await fetch(`/api/items`);
         if (res.ok) {
           const data = await res.json();
           setClosetItems(data);
           data.forEach((item: any) => {
             const img = new Image();
             img.crossOrigin = "anonymous";
-            img.src = `${apiBase}${item.image_url}`;
+            img.src = item.image_url;
             imageCacheRef.current.set(item.id, img);
           });
         }
@@ -220,7 +218,7 @@ export default function StudioPage() {
       }
     }
     loadCloset();
-  }, [apiBase]);
+  }, []);
 
   // Preload catalog images into cache
   useEffect(() => {
@@ -248,9 +246,9 @@ export default function StudioPage() {
       return;
     }
 
-    const wsUrl = typeof window !== "undefined"
-      ? `ws://${window.location.hostname}:8000/api/tryon/live`
-      : "ws://localhost:8000/api/tryon/live";
+    const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = typeof window !== "undefined" ? window.location.host : "";
+    const wsUrl = `${proto}//${host}/api/tryon/live`;
 
     const ws = new WebSocket(wsUrl);
     liveAiWsRef.current = ws;
@@ -390,11 +388,11 @@ export default function StudioPage() {
         if (!isMounted) return;
         setLoadingStatus("Compiling neural landmarkers (Face, Pose, Hands)...");
 
-        // Face Landmarker
+        // Face Landmarker (self-hosted with fallback)
+        const faceModelPath = "/models/face_landmarker.task";
         const faceModel = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            modelAssetPath: faceModelPath,
             delegate: "GPU"
           },
           runningMode: "VIDEO",
@@ -403,20 +401,28 @@ export default function StudioPage() {
           setGpuAccelerated(false);
           return FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+              modelAssetPath: faceModelPath,
               delegate: "CPU"
             },
             runningMode: "VIDEO",
             numFaces: 1
+          }).catch(() => {
+            return FaceLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numFaces: 1
+            });
           });
         });
 
-        // Pose Landmarker Lite
+        // Pose Landmarker Lite (self-hosted with fallback)
+        const poseModelPath = "/models/pose_landmarker_lite.task";
         const poseModel = await PoseLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+            modelAssetPath: poseModelPath,
             delegate: "GPU"
           },
           runningMode: "VIDEO",
@@ -424,20 +430,28 @@ export default function StudioPage() {
         }).catch(async () => {
           return PoseLandmarker.createFromOptions(vision, {
             baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+              modelAssetPath: poseModelPath,
               delegate: "CPU"
             },
             runningMode: "VIDEO",
             numPoses: 1
+          }).catch(() => {
+            return PoseLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numPoses: 1
+            });
           });
         });
 
-        // Hand Landmarker
+        // Hand Landmarker (self-hosted with fallback)
+        const handModelPath = "/models/hand_landmarker.task";
         const handModel = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            modelAssetPath: handModelPath,
             delegate: "GPU"
           },
           runningMode: "VIDEO",
@@ -445,21 +459,29 @@ export default function StudioPage() {
         }).catch(async () => {
           return HandLandmarker.createFromOptions(vision, {
             baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+              modelAssetPath: handModelPath,
               delegate: "CPU"
             },
             runningMode: "VIDEO",
             numHands: 2
+          }).catch(() => {
+            return HandLandmarker.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              numHands: 2
+            });
           });
         });
 
-        // Image Segmenter for live hair recolouring & person segmentation
+        // Image Segmenter for live hair recolouring & person segmentation (self-hosted with fallback)
         const { ImageSegmenter } = visionModule;
+        const hairModelPath = "/models/hair_segmenter.tflite";
         const segmenterModel = await ImageSegmenter.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath:
-              "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+            modelAssetPath: hairModelPath,
             delegate: "GPU"
           },
           runningMode: "VIDEO",
@@ -468,16 +490,25 @@ export default function StudioPage() {
         }).catch(async () => {
           return ImageSegmenter.createFromOptions(vision, {
             baseOptions: {
-              modelAssetPath:
-                "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+              modelAssetPath: hairModelPath,
               delegate: "CPU"
             },
             runningMode: "VIDEO",
             outputCategoryMask: true,
             outputConfidenceMasks: false
-          }).catch((e) => {
-            console.warn("Hair segmenter model unavailable:", e);
-            return null;
+          }).catch(() => {
+            return ImageSegmenter.createFromOptions(vision, {
+              baseOptions: {
+                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/latest/hair_segmenter.tflite",
+                delegate: "CPU"
+              },
+              runningMode: "VIDEO",
+              outputCategoryMask: true,
+              outputConfidenceMasks: false
+            }).catch((e) => {
+              console.warn("Hair segmenter model unavailable:", e);
+              return null;
+            });
           });
         });
 

@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "start:all": "python scripts/run.py --prod",
+    "dev:all": "python scripts/run.py --dev",
     "dev:frontend": "cd frontend && npm run dev",
-    "dev:frontend-https": "cd frontend && npm run dev:https",
-    "dev:frontend-host": "cd frontend && npm run dev:host-https",
     "dev:backend": "cd backend && python main.py",
-    "tunnel": "cloudflared tunnel --url http://localhost:3000"
+    "build:frontend": "cd frontend && npm run build",
+    "verify:isolation": "python scripts/verify_network_isolation.py"
   }
 }

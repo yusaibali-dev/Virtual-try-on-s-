@@ -1,7 +1,8 @@
 import os
 import uuid
 from typing import Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -35,14 +36,39 @@ app = FastAPI(
     version="0.2.0"
 )
 
-# Enable CORS for frontend development and network devices
+# Tightened CORS for loopback reverse proxy (Caddy forwards requests from same origin)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3001",
+        "http://localhost:3001"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Access Gate Middleware: protects API endpoints when tunnel is active
+ACCESS_CODE = os.environ.get("ACCESS_CODE", "").strip()
+
+@app.middleware("http")
+async def access_gate_middleware(request: Request, call_next):
+    # Only enforce if ACCESS_CODE is actively configured
+    expected_code = os.environ.get("ACCESS_CODE", "").strip()
+    if expected_code:
+        path = request.url.path
+        # Exclude auth, health, root, docs, and preflight OPTIONS
+        if not (path.startswith("/api/auth") or path == "/api/health" or path == "/" or request.method == "OPTIONS"):
+            session_cookie = request.cookies.get("vton_access_session")
+            header_code = request.headers.get("X-Access-Code")
+            if session_cookie != expected_code and header_code != expected_code:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Unauthorized. Passcode required.", "gate_required": True}
+                )
+    return await call_next(request)
 
 # Mount local storage for serving clean cutout images and thumbnails
 app.mount("/storage/items", StaticFiles(directory=UPLOADS_DIR), name="items")
@@ -69,6 +95,34 @@ def health_check():
         "storage": "sqlite + local fs",
         "milestone": "Milestone 3 - Closet & Internet Items"
     }
+
+class GateAuthRequest(BaseModel):
+    code: str
+
+@app.post("/api/auth/gate")
+def authenticate_gate(payload: GateAuthRequest, response: Response):
+    expected_code = os.environ.get("ACCESS_CODE", "").strip()
+    if not expected_code or payload.code == expected_code:
+        response.set_cookie(
+            key="vton_access_session",
+            value=expected_code or "authorized",
+            httponly=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 7,
+            secure=False
+        )
+        return {"status": "authorized", "gate_active": bool(expected_code)}
+    raise HTTPException(status_code=401, detail="Invalid passcode.")
+
+@app.get("/api/auth/status")
+def gate_status(request: Request):
+    expected_code = os.environ.get("ACCESS_CODE", "").strip()
+    if not expected_code:
+        return {"gate_active": False, "authenticated": True}
+    session_cookie = request.cookies.get("vton_access_session")
+    header_code = request.headers.get("X-Access-Code")
+    is_auth = (session_cookie == expected_code or header_code == expected_code)
+    return {"gate_active": True, "authenticated": is_auth}
 
 @app.post("/api/items")
 async def create_item_from_url(payload: ItemUrlRequest):
@@ -485,6 +539,36 @@ async def stream_job_progress(job_id: str):
 
     return EventSourceResponse(job_queue_manager.stream_job_events(job_id))
 
+@app.websocket("/api/jobs/{job_id}/ws")
+async def websocket_job_progress(websocket: WebSocket, job_id: str):
+    """WebSocket stream for live progress updates (works smoothly over Cloudflare tunnels)."""
+    await websocket.accept()
+    job = job_queue_manager.get_job(job_id)
+    if not job:
+        await websocket.send_text(json.dumps({"error": "Job not found"}))
+        await websocket.close()
+        return
+
+    try:
+        async for event in job_queue_manager.stream_job_events(job_id):
+            await websocket.send_text(json.dumps(event))
+            if event.get("data"):
+                try:
+                    payload = json.loads(event["data"]) if isinstance(event["data"], str) else event["data"]
+                    if payload.get("status") in ("completed", "failed", "cancelled"):
+                        break
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[WebSocket Job] Stream error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str):
     """Cancel an active try-on job."""
@@ -804,5 +888,5 @@ async def websocket_live_tryon(websocket: WebSocket):
         receiver_task.cancel()
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
 

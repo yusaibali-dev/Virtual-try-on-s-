@@ -44,6 +44,8 @@ wheels/
 .installed.cfg
 *.egg
 .pytest_cache/
+tools/
+*.exe
 
 # Model weights, AI checkpoints and caches
 /backend/weights/
@@ -71,6 +73,18 @@ vton_closet.db
 *.mp4
 *.webm
 *.png.tmp
+
+# Privacy: Test fixtures and benchmark image outputs (protect real faces & private images)
+/backend/tests/vton_fixtures/inputs/*
+!/backend/tests/vton_fixtures/inputs/README.md
+/docs/benchmarks/catvton/*.png
+/docs/benchmarks/catvton/*.jpg
+/docs/benchmarks/catvton/*.jpeg
+/docs/benchmarks/catvton/*.webp
+/docs/benchmarks/fashn/*.png
+/docs/benchmarks/fashn/*.jpg
+/docs/benchmarks/fashn/*.jpeg
+/docs/benchmarks/fashn/*.webp
 
 # OS & Editor junk
 .DS_Store

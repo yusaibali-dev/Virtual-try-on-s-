@@ -67,10 +67,8 @@ export default function ClosetPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Backend API URL (Default to localhost:8000 or relative)
-  const apiBase = typeof window !== "undefined"
-    ? `http://${window.location.hostname}:8000`
-    : "http://localhost:8000";
+  // Single-origin relative API base
+  const apiBase = "";
 
   // Fetch Items from Backend
   const fetchItems = async () => {
