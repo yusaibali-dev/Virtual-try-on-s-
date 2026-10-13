@@ -104,10 +104,27 @@ def remove_background(image_bytes: bytes) -> bytes:
         img.save(out_buf, format="PNG")
         return out_buf.getvalue()
 
+import hashlib
+from collections import OrderedDict
+
+# In-memory LRU thumbnail cache (max 100 items)
+_THUMBNAIL_CACHE = OrderedDict()
+_MAX_CACHE_ITEMS = 100
+
 def create_thumbnail(image_bytes: bytes, max_size: tuple[int, int] = (256, 256)) -> bytes:
-    """Creates a high quality thumbnail preserving alpha channel."""
+    """Creates a high quality thumbnail preserving alpha channel with in-memory LRU caching."""
+    cache_key = hashlib.md5(image_bytes).hexdigest() + f"_{max_size[0]}x{max_size[1]}"
+    if cache_key in _THUMBNAIL_CACHE:
+        _THUMBNAIL_CACHE.move_to_end(cache_key)
+        return _THUMBNAIL_CACHE[cache_key]
+
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
-    img.thumbnail(max_size, Image.Resampling.LANCZOS)
+    img.thumbnail(max_size, Image.Resampling.BILINEAR)
     out_buf = io.BytesIO()
-    img.save(out_buf, format="PNG")
-    return out_buf.getvalue()
+    img.save(out_buf, format="PNG", optimize=True)
+    res_bytes = out_buf.getvalue()
+
+    if len(_THUMBNAIL_CACHE) >= _MAX_CACHE_ITEMS:
+        _THUMBNAIL_CACHE.popitem(last=False)
+    _THUMBNAIL_CACHE[cache_key] = res_bytes
+    return res_bytes

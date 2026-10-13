@@ -70,6 +70,8 @@ huggingface/
 vton_closet.db
 /backend/vton_closet.db
 /frontend/public/captures/
+/frontend/public/models/
+/frontend/public/wasm/
 *.mp4
 *.webm
 *.png.tmp

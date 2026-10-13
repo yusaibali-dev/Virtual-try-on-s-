@@ -196,6 +196,17 @@ export default function StudioPage() {
   const frameTimestampsRef = useRef<number[]>([]);
   const lastMetricsUpdateRef = useRef<number>(0);
 
+  // Performance & Adaptive Governor Refs (Direct DOM mutation, zero per-frame React state re-renders)
+  const fpsCounterRef = useRef<HTMLDivElement>(null);
+  const fpsTextRef = useRef<HTMLSpanElement>(null);
+  const latencyTextRef = useRef<HTMLSpanElement>(null);
+  const detectionCadenceRef = useRef<number>(1); // 1 = every frame, 2 = balanced, 3 = battery saver
+  const frameCountRef = useRef<number>(0);
+  const offscreenDetectionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastPoseResultRef = useRef<any>(null);
+  const lastFaceResultRef = useRef<any>(null);
+  const lastHandResultRef = useRef<any>(null);
+
   // Fetch closet items from backend (single-origin relative)
   const apiBase = "";
 
@@ -678,13 +689,37 @@ export default function StudioPage() {
       let detectedPoses = 0;
       let detectedHands = 0;
 
+      frameCountRef.current++;
+      const shouldDetect = (frameCountRef.current % detectionCadenceRef.current) === 0;
+
+      // Downscaled offscreen canvas (480p) for high-performance MediaPipe inference
+      if (!offscreenDetectionCanvasRef.current) {
+        offscreenDetectionCanvasRef.current = document.createElement("canvas");
+      }
+      const offCanvas = offscreenDetectionCanvasRef.current;
+      const targetDetectW = 480;
+      const targetDetectH = Math.round((video.videoHeight / (video.videoWidth || 1)) * targetDetectW) || 360;
+      if (offCanvas.width !== targetDetectW || offCanvas.height !== targetDetectH) {
+        offCanvas.width = targetDetectW;
+        offCanvas.height = targetDetectH;
+      }
+      if (shouldDetect) {
+        const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
+        if (offCtx) {
+          offCtx.drawImage(video, 0, 0, targetDetectW, targetDetectH);
+        }
+      }
+
       // -------------------------------------------------------------
       // 1. POSE DETECTION: Necklaces & Collarbone fitting
       // -------------------------------------------------------------
       if (poseLandmarkerRef.current && mp) {
         try {
-          const poseResult = poseLandmarkerRef.current.detectForVideo(video, timestamp);
-          if (poseResult.landmarks && poseResult.landmarks.length > 0) {
+          if (shouldDetect) {
+            lastPoseResultRef.current = poseLandmarkerRef.current.detectForVideo(offCanvas, timestamp);
+          }
+          const poseResult = lastPoseResultRef.current;
+          if (poseResult && poseResult.landmarks && poseResult.landmarks.length > 0) {
             detectedPoses = poseResult.landmarks.length;
             const landmarks = poseResult.landmarks[0];
 
@@ -862,8 +897,11 @@ export default function StudioPage() {
       // -------------------------------------------------------------
       if (faceLandmarkerRef.current && mp) {
         try {
-          const faceResult = faceLandmarkerRef.current.detectForVideo(video, timestamp);
-          if (faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
+          if (shouldDetect) {
+            lastFaceResultRef.current = faceLandmarkerRef.current.detectForVideo(offCanvas, timestamp);
+          }
+          const faceResult = lastFaceResultRef.current;
+          if (faceResult && faceResult.faceLandmarks && faceResult.faceLandmarks.length > 0) {
             detectedFaces = faceResult.faceLandmarks.length;
             const landmarks = faceResult.faceLandmarks[0];
 
@@ -1038,8 +1076,11 @@ export default function StudioPage() {
       // -------------------------------------------------------------
       if (handLandmarkerRef.current && mp) {
         try {
-          const handResult = handLandmarkerRef.current.detectForVideo(video, timestamp);
-          if (handResult.landmarks && handResult.landmarks.length > 0) {
+          if (shouldDetect) {
+            lastHandResultRef.current = handLandmarkerRef.current.detectForVideo(offCanvas, timestamp);
+          }
+          const handResult = lastHandResultRef.current;
+          if (handResult && handResult.landmarks && handResult.landmarks.length > 0) {
             detectedHands = handResult.landmarks.length;
 
             if (enableHands && drawingUtils) {
@@ -1151,22 +1192,43 @@ export default function StudioPage() {
 
       const inferenceDuration = performance.now() - startTime;
 
-      // FPS Window Calculation
+      // FPS Window & Adaptive Quality Governor (protect 25+ FPS budget)
       const now = performance.now();
       frameTimestampsRef.current.push(now);
       while (frameTimestampsRef.current.length > 0 && frameTimestampsRef.current[0] < now - 1000) {
         frameTimestampsRef.current.shift();
       }
 
-      if (now - lastMetricsUpdateRef.current > 400) {
+      if (now - lastMetricsUpdateRef.current > 500) {
         lastMetricsUpdateRef.current = now;
-        setFps(frameTimestampsRef.current.length);
-        setLatencyMs(Math.round(inferenceDuration));
-        setDetectionsCount({
-          faces: detectedFaces,
-          poses: detectedPoses,
-          hands: detectedHands
-        });
+        const currentFps = frameTimestampsRef.current.length;
+        const currentLatency = Math.round(inferenceDuration);
+
+        // Adaptive Governor: High (>=26 fps) -> Balanced (18-25 fps) -> Battery Saver (<18 fps)
+        if (currentFps >= 26) {
+          detectionCadenceRef.current = 1;
+        } else if (currentFps >= 18) {
+          detectionCadenceRef.current = 2; // Every 2nd frame
+        } else {
+          detectionCadenceRef.current = 3; // Every 3rd frame
+        }
+
+        // Direct DOM update avoiding React re-renders
+        if (fpsTextRef.current) {
+          fpsTextRef.current.textContent = `${currentFps} FPS`;
+        }
+        if (latencyTextRef.current) {
+          latencyTextRef.current.textContent = `${currentLatency}ms`;
+        }
+        if (fpsCounterRef.current) {
+          fpsCounterRef.current.className = `flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono font-medium border shadow-inner transition-colors ${
+            currentFps >= 22
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+              : currentFps >= 14
+              ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+              : "bg-rose-500/10 text-rose-400 border-rose-500/30"
+          }`;
+        }
       }
     }
 
@@ -1301,18 +1363,13 @@ export default function StudioPage() {
             {/* Performance Badge */}
             <div
               id="fps-counter"
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono font-medium border shadow-inner transition-colors ${
-                fps >= 20
-                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
-                  : fps >= 12
-                  ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
-                  : "bg-rose-500/10 text-rose-400 border-rose-500/30"
-              }`}
+              ref={fpsCounterRef}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-mono font-medium border shadow-inner transition-colors bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
             >
               <Activity className="w-3.5 h-3.5 animate-pulse" />
-              <span>{fps} FPS</span>
+              <span ref={fpsTextRef}>30 FPS</span>
               <span className="text-neutral-500">|</span>
-              <span className="text-neutral-400">{latencyMs}ms</span>
+              <span ref={latencyTextRef} className="text-neutral-400">12ms</span>
             </div>
           </div>
         </div>

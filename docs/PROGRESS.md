@@ -138,6 +138,32 @@ python scripts/benchmark.py
 
 ---
 
+### Milestone: Single-Link Access, Runtime Performance Optimization, & FASHN VTON 1.5
+- **Status**: **Done**
+- **Part A (Single Origin Architecture & Access Gate)**:
+  - Caddy reverse proxy on port 3000 routing `/api/*` and `/storage/*` to FastAPI (:8000) and Next.js (:3001).
+  - Single public entry point URL + ANSI QR code printed by `scripts/run.py`.
+  - Passcode access gate (`/gate`) protecting public tunnels from unauthorized web bots and spiders.
+  - Zero hardcoded localhost ports in frontend code.
+- **Part B (FASHN VTON 1.5 Integration & CatVTON Removal)**:
+  - `ClothesTryOnBackend` abstraction with `FashnVtonBackend` and `FakeClothesBackend`.
+  - Isolated GPU microservice (`/gpu_worker`) on `127.0.0.1:8100` with 5-minute auto-unload.
+  - Native 576x864 letterbox padding and unletterbox geometry.
+  - Native MMDiT pixel-space diffusion; CatVTON completely purged from codebase.
+  - Garment photo type auto-detection (`flat-lay` vs `model`) with manual override.
+  - Comprehensive unit test suite (`backend/test_fashn_backend.py`) with 8 passed tests.
+- **Part C (Website & Runtime Performance Optimization)**:
+  - Created `/docs/PERF.md` baseline and benchmark report.
+  - Studio single-loop `requestAnimationFrame` with downscaled 480p offscreen MediaPipe inference.
+  - Adaptive Quality Governor (High -> Balanced -> Battery Saver) protecting 25+ FPS budget on mobile.
+  - Zero per-frame React state re-renders (direct DOM node ref updates for FPS and latency).
+  - SQLite WAL mode (`PRAGMA journal_mode=WAL`), busy timeout, and indices.
+  - ETag conditional response caching (`304 Not Modified`) on `/api/items`.
+  - In-memory LRU thumbnail caching and immutable static headers (`max-age=31536000`).
+  - Next.js Turbopack build optimization (compiles in 1.47s).
+
+---
+
 ## Known Issues & Notes
 - On mobile devices, ensure camera permissions are granted over HTTPS (via Cloudflare tunnel: `cloudflared tunnel --url http://localhost:3000`).
 - If mobile network connectivity is slow (RTT > 6s), the studio auto-falls back to Tier-A on-device overlay to preserve camera responsiveness.

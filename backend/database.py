@@ -6,8 +6,11 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(__file__), "vton_closet.db")
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL;")
+    cursor.execute("PRAGMA synchronous=NORMAL;")
+    cursor.execute("PRAGMA busy_timeout=5000;")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS closet_items (
             id TEXT PRIMARY KEY,
@@ -22,12 +25,15 @@ def init_db():
             metadata_json TEXT
         )
     """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_closet_category ON closet_items(category);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_closet_created_at ON closet_items(created_at);")
     conn.commit()
     conn.close()
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 def insert_item(item_data: dict) -> dict:

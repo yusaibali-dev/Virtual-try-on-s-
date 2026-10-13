@@ -70,9 +70,17 @@ async def access_gate_middleware(request: Request, call_next):
                 )
     return await call_next(request)
 
-# Mount local storage for serving clean cutout images and thumbnails
-app.mount("/storage/items", StaticFiles(directory=UPLOADS_DIR), name="items")
-app.mount("/storage/thumbnails", StaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
+class CachedStaticFiles(StaticFiles):
+    """StaticFiles subclass that injects optimal browser caching headers for immutable assets."""
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+# Mount local storage with aggressive caching for cutouts and thumbnails
+app.mount("/storage/items", CachedStaticFiles(directory=UPLOADS_DIR), name="items")
+app.mount("/storage/thumbnails", CachedStaticFiles(directory=THUMBNAILS_DIR), name="thumbnails")
 
 class ItemUrlRequest(BaseModel):
     url: str
@@ -286,14 +294,29 @@ async def create_item_from_upload(
 
 @app.get("/api/items")
 def get_closet_items(
+    request: Request,
+    response: Response,
     category: Optional[str] = Query(None),
     favourites: bool = Query(False)
 ):
-    """List all closet items with category filtering and favourites."""
+    """List all closet items with category filtering, favourites, and conditional ETag 304 caching."""
+    import hashlib
     items = list_items(category=category, favourites_only=favourites)
+    
+    # Generate quick fingerprint ETag based on item count and first item id
+    token = f"{len(items)}:{items[0]['id'] if items else 'empty'}"
+    etag = f'"{hashlib.md5(token.encode("utf-8")).hexdigest()}"'
+    
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304)
+
     for it in items:
         it["image_url"] = f"/storage/items/{it['image_filename']}"
         it["thumbnail_url"] = f"/storage/thumbnails/{it['thumbnail_filename']}"
+    
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "public, max-age=10, stale-while-revalidate=60"
     return items
 
 @app.patch("/api/items/{item_id}/favourite")
@@ -402,7 +425,7 @@ import io
 
 TRYON_DIR = os.path.join(os.path.dirname(__file__), "storage", "tryon")
 os.makedirs(TRYON_DIR, exist_ok=True)
-app.mount("/storage/tryon", StaticFiles(directory=TRYON_DIR), name="tryon")
+app.mount("/storage/tryon", CachedStaticFiles(directory=TRYON_DIR), name="tryon")
 
 class TryonJobRequest(BaseModel):
     closet_item_id: str
